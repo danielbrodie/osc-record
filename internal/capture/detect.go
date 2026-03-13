@@ -6,7 +6,7 @@ import (
 	"github.com/brodiegraphics/osc-record/internal/devices"
 )
 
-func ResolveMode(requested, ffmpegPath, goos string) (CaptureMode, string, error) {
+func ResolveMode(requested, ffmpegPath, goos, formatCode string) (CaptureMode, string, error) {
 	switch requested {
 	case "", ModeAuto:
 		supported, err := devices.HasDecklinkSupport(ffmpegPath)
@@ -14,7 +14,7 @@ func ResolveMode(requested, ffmpegPath, goos string) (CaptureMode, string, error
 			return nil, "", err
 		}
 		if supported {
-			return DecklinkMode{}, "", nil
+			return DecklinkMode{FormatCode: formatCode}, "", nil
 		}
 		fallback := fallbackMode(goos)
 		return newMode(fallback), warningForFallback(fallback), nil
@@ -26,7 +26,7 @@ func ResolveMode(requested, ffmpegPath, goos string) (CaptureMode, string, error
 		if !supported {
 			return nil, "", fmt.Errorf("Error: Capture mode set to %q but ffmpeg was not compiled with decklink support. Install ffmpeg with --with-decklink or set capture_mode to %q.", ModeDecklink, ModeAuto)
 		}
-		return DecklinkMode{}, "", nil
+		return DecklinkMode{FormatCode: formatCode}, "", nil
 	case ModeAVFoundation, ModeDShow:
 		if !modeSupportedOnOS(requested, goos) {
 			return nil, "", fmt.Errorf("Error: Capture mode %q is not supported on %s.", requested, goos)

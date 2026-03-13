@@ -197,6 +197,7 @@ stop_address = ""      # set by 'capture stop'
 capture_mode = "auto"  # "auto", "decklink", "avfoundation", "dshow"
 name = ""              # device name (decklink) or video device index/name (avfoundation/dshow)
 audio = ""             # audio device index or name (avfoundation/dshow only, ignored for decklink)
+format_code = ""       # decklink format code (e.g. "Hp59" for 1080p59.94). Leave empty to let ffmpeg autodetect. Required for devices that do not support format autodetection (e.g. UltraStudio Recorder 3G over SDI).
 
 [recording]
 profile = "h264"       # "prores", "hevc", "h264"
@@ -217,7 +218,9 @@ osc-record supports two capture paths. The `auto` mode (default) tries decklink 
 
 ### Decklink Mode (Preferred)
 
-Uses ffmpeg's `-f decklink` input format, which is Blackmagic's own ffmpeg integration. The key advantage: **decklink auto-detects the incoming signal format.** No need to specify framerate, resolution, or pixel format. ffmpeg queries the device, reads whatever the camera is sending (1080i59.94, 1080p29.97, 4K30, etc.), and captures it directly.
+Uses ffmpeg's `-f decklink` input format, which is Blackmagic's own ffmpeg integration. The key advantage: **decklink auto-detects the incoming signal format** in most cases. No need to specify framerate, resolution, or pixel format. ffmpeg queries the device, reads whatever the camera is sending (1080i59.94, 1080p29.97, 4K30, etc.), and captures it directly.
+
+Some devices (e.g. UltraStudio Recorder 3G over SDI) do not support format autodetection. In that case, set `device.format_code` in config to the appropriate decklink format code (e.g. `"Hp59"` for 1080p59.94). Run `ffmpeg -f decklink -list_formats 1 -i "Device Name"` to see supported format codes for a given device.
 
 Audio is embedded in the decklink stream (SDI carries audio natively), so no separate audio device is needed.
 

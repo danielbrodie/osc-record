@@ -27,6 +27,7 @@ type DeviceConfig struct {
 	CaptureMode string `toml:"capture_mode"`
 	Name        string `toml:"name"`
 	Audio       string `toml:"audio"`
+	FormatCode  string `toml:"format_code"`
 }
 
 type RecordingConfig struct {

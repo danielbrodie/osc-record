@@ -59,7 +59,7 @@ var runCmd = &cobra.Command{
 			return errors.New("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
 		}
 
-		mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS)
+		mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode)
 		if err != nil {
 			return err
 		}
