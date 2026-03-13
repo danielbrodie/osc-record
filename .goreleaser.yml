@@ -23,5 +23,5 @@ archives:
 
 release:
   github:
-    owner: brodiegraphics
+    owner: danielbrodie
     name: osc-record

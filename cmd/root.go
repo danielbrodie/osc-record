@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	cfgpkg "github.com/brodiegraphics/osc-record/internal/config"
+	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
 )
 
 var (

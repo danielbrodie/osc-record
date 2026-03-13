@@ -1,4 +1,4 @@
-module github.com/brodiegraphics/osc-record
+module github.com/danielbrodie/osc-record
 
 go 1.26
 

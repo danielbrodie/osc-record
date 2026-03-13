@@ -3,7 +3,7 @@ package capture
 import (
 	"fmt"
 
-	"github.com/brodiegraphics/osc-record/internal/devices"
+	"github.com/danielbrodie/osc-record/internal/devices"
 )
 
 func ResolveMode(requested, ffmpegPath, goos, formatCode string) (CaptureMode, string, error) {

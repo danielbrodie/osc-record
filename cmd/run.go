@@ -14,12 +14,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/brodiegraphics/osc-record/internal/capture"
-	cfgpkg "github.com/brodiegraphics/osc-record/internal/config"
-	"github.com/brodiegraphics/osc-record/internal/devices"
-	oscpkg "github.com/brodiegraphics/osc-record/internal/osc"
-	"github.com/brodiegraphics/osc-record/internal/platform"
-	"github.com/brodiegraphics/osc-record/internal/recorder"
+	"github.com/danielbrodie/osc-record/internal/capture"
+	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
+	"github.com/danielbrodie/osc-record/internal/devices"
+	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
+	"github.com/danielbrodie/osc-record/internal/platform"
+	"github.com/danielbrodie/osc-record/internal/recorder"
 )
 
 func init() {

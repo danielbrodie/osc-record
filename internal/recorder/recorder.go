@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brodiegraphics/osc-record/internal/capture"
-	"github.com/brodiegraphics/osc-record/internal/platform"
+	"github.com/danielbrodie/osc-record/internal/capture"
+	"github.com/danielbrodie/osc-record/internal/platform"
 )
 
 type ExitStatus struct {

@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/brodiegraphics/osc-record/internal/devices"
+	"github.com/danielbrodie/osc-record/internal/devices"
 )
 
 func init() {

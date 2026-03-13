@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	oscpkg "github.com/brodiegraphics/osc-record/internal/osc"
+	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 )
 
 func init() {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/brodiegraphics/osc-record/cmd"
+	"github.com/danielbrodie/osc-record/cmd"
 )
 
 var version = "0.1.0"
