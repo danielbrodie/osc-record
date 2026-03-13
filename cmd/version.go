@@ -7,11 +7,13 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(&cobra.Command{
-		Use:   "version",
-		Short: "Print version",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("osc-record v%s\n", rootCmd.Version)
-		},
-	})
+	rootCmd.AddCommand(versionCmd)
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version information",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("osc-record v%s\n", appVersion)
+	},
 }

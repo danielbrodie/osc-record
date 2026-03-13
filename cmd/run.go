@@ -2,290 +2,313 @@ package cmd
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
+	"github.com/spf13/cobra"
+
 	"github.com/brodiegraphics/osc-record/internal/capture"
-	"github.com/brodiegraphics/osc-record/internal/config"
+	cfgpkg "github.com/brodiegraphics/osc-record/internal/config"
 	"github.com/brodiegraphics/osc-record/internal/devices"
-	osclib "github.com/brodiegraphics/osc-record/internal/osc"
+	oscpkg "github.com/brodiegraphics/osc-record/internal/osc"
 	"github.com/brodiegraphics/osc-record/internal/platform"
 	"github.com/brodiegraphics/osc-record/internal/recorder"
-	"github.com/spf13/cobra"
 )
 
 func init() {
-	var (
-		prefix      string
-		profile     string
-		output      string
-		port        int
-		captureMode string
-		videoDevice string
-		audioDevice string
-	)
+	defaults := cfgpkg.Defaults()
 
-	runCmd := &cobra.Command{
-		Use:   "run",
-		Short: "Start the OSC recording daemon",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ffmpeg := devices.FFmpegPath(cfg.FFmpeg.Path)
-
-			// 1. Validate ffmpeg
-			if _, err := exec.LookPath(ffmpeg); err != nil {
-				if _, err2 := os.Stat(ffmpeg); err2 != nil {
-					return fmt.Errorf("Error: ffmpeg not found on PATH. Install with 'brew install ffmpeg' or set ffmpeg.path in config.")
-				}
-			}
-
-			// 2. Validate OSC addresses
-			if cfg.OSC.RecordAddress == "" {
-				return fmt.Errorf("Error: No record trigger configured. Run 'osc-record capture record' first.")
-			}
-			if cfg.OSC.StopAddress == "" {
-				return fmt.Errorf("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
-			}
-
-			// Apply flag overrides
-			if cmd.Flags().Changed("port") {
-				cfg.OSC.Port = port
-			}
-			if cmd.Flags().Changed("profile") {
-				cfg.Recording.Profile = profile
-			}
-			if cmd.Flags().Changed("prefix") {
-				cfg.Recording.Prefix = prefix
-			}
-			if cmd.Flags().Changed("output") {
-				cfg.Recording.OutputDir = output
-			}
-			if cmd.Flags().Changed("capture-mode") {
-				cfg.Device.CaptureMode = captureMode
-			}
-			if cmd.Flags().Changed("video-device") {
-				cfg.Device.Name = videoDevice
-			}
-			if cmd.Flags().Changed("audio-device") {
-				cfg.Device.Audio = audioDevice
-			}
-
-			// 3. Resolve capture mode (automatic, decklink wins)
-			resolvedMode := capture.ResolveMode(ffmpeg, cfg.Device.CaptureMode)
-
-			// 4. Interactive device picker if device.name unset
-			if cfg.Device.Name == "" && !cmd.Flags().Changed("video-device") {
-				if err := pickDevice(ffmpeg, resolvedMode); err != nil {
-					return err
-				}
-			}
-
-			// Windows ProRes warning
-			if runtime.GOOS == "windows" && strings.ToLower(cfg.Recording.Profile) == "prores" {
-				fmt.Fprintln(os.Stderr, "Warning: ProRes playback on Windows requires QuickTime or VLC.")
-			}
-
-			// Build capture mode
-			var capMode capture.Mode
-			switch resolvedMode {
-			case "decklink":
-				capMode = &capture.DecklinkMode{DeviceName: cfg.Device.Name}
-			default:
-				capMode = buildFallbackMode(cfg.Device.Name, cfg.Device.Audio)
-			}
-
-			// 5. Decklink probe (before binding OSC port)
-			if resolvedMode == "decklink" {
-				probe := exec.Command(ffmpeg, "-f", "decklink", "-i", cfg.Device.Name, "-t", "2", "-f", "null", "-")
-				if err := probe.Run(); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: No valid signal detected on %q. Recording will fail until a signal is present.\n", cfg.Device.Name)
-				}
-			}
-
-			// 6. Create output dir
-			outDir := config.ExpandTilde(cfg.Recording.OutputDir)
-			if err := os.MkdirAll(outDir, 0755); err != nil {
-				return fmt.Errorf("Error: Output directory %s does not exist and could not be created: %v", outDir, err)
-			}
-
-			// 7. Print startup summary
-			recordAddr := cfg.OSC.RecordAddress
-			stopAddr := cfg.OSC.StopAddress
-			oscPort := cfg.OSC.Port
-
-			fmt.Println("osc-record running")
-			fmt.Printf("  OSC port:    %d\n", oscPort)
-			fmt.Printf("  Record:      %s\n", recordAddr)
-			fmt.Printf("  Stop:        %s\n", stopAddr)
-			fmt.Printf("  Capture:     %s\n", capMode.Name())
-			fmt.Printf("  Profile:     %s\n", cfg.Recording.Profile)
-			fmt.Printf("  Prefix:      %s\n", cfg.Recording.Prefix)
-			fmt.Printf("  Output:      %s\n", outDir)
-			fmt.Printf("  Device:      %s\n", cfg.Device.Name)
-			fmt.Println()
-			fmt.Println("Waiting for record trigger...")
-
-			rec := &recorder.Recorder{
-				FFmpegPath: ffmpeg,
-				OutputDir:  outDir,
-				Prefix:     cfg.Recording.Prefix,
-				Profile:    cfg.Recording.Profile,
-				Mode:       capMode,
-				Stopper:    platform.New(),
-			}
-
-			var mu sync.Mutex
-
-			srv := osclib.NewServer(oscPort, func(addr string, _ []interface{}) {
-				mu.Lock()
-				defer mu.Unlock()
-
-				switch addr {
-				case recordAddr:
-					if rec.IsRecording() {
-						fmt.Fprintln(os.Stderr, "Warning: Record trigger received but already recording. Ignoring.")
-						return
-					}
-					f, startErr := rec.Start()
-					if startErr != nil {
-						fmt.Fprintf(os.Stderr, "Error starting recording: %v\n", startErr)
-						return
-					}
-					fmt.Printf("Recording started: %s\n", f)
-					rec.WatchExit(func(code int) {
-						fmt.Fprintf(os.Stderr, "Error: ffmpeg exited unexpectedly (code %d). Waiting for record trigger...\n", code)
-					})
-
-				case stopAddr:
-					if !rec.IsRecording() {
-						fmt.Fprintln(os.Stderr, "Warning: Stop trigger received but not recording. Ignoring.")
-						return
-					}
-					f, stopErr := rec.Stop()
-					if stopErr != nil {
-						fmt.Fprintf(os.Stderr, "Error stopping recording: %v\n", stopErr)
-						return
-					}
-					fmt.Printf("Recording saved: %s\n", f)
-					fmt.Println("Waiting for record trigger...")
-				}
-			})
-
-			// Handle SIGTERM/SIGINT gracefully
-			sigs := make(chan os.Signal, 1)
-			signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-			go func() {
-				<-sigs
-				mu.Lock()
-				if rec.IsRecording() {
-					f, _ := rec.Stop()
-					if f != "" {
-						fmt.Printf("\nRecording saved: %s\n", f)
-					}
-				}
-				mu.Unlock()
-				os.Exit(0)
-			}()
-
-			return srv.ListenAndServe()
-		},
-	}
-
-	runCmd.Flags().StringVar(&prefix, "prefix", "recording", "Filename prefix")
-	runCmd.Flags().StringVar(&profile, "profile", "h264", "Recording profile: prores, hevc, h264")
-	runCmd.Flags().StringVar(&output, "output", "~/Dropbox/osc-record/", "Output directory")
-	runCmd.Flags().IntVar(&port, "port", 8000, "OSC listen port")
-	runCmd.Flags().StringVar(&captureMode, "capture-mode", "auto", "Capture mode: auto, decklink, avfoundation, dshow")
-	runCmd.Flags().StringVar(&videoDevice, "video-device", "", "Override video device")
-	runCmd.Flags().StringVar(&audioDevice, "audio-device", "", "Override audio device")
+	runCmd.Flags().String("prefix", defaults.Recording.Prefix, "Filename prefix prepended to date")
+	runCmd.Flags().String("profile", defaults.Recording.Profile, "Recording profile: prores, hevc, or h264")
+	runCmd.Flags().String("output", defaults.Recording.OutputDir, "Output directory for recordings")
+	runCmd.Flags().Int("port", defaults.OSC.Port, "Override OSC listen port")
+	runCmd.Flags().String("capture-mode", defaults.Device.CaptureMode, "Capture mode: auto, decklink, avfoundation, or dshow")
+	runCmd.Flags().String("video-device", "", "Override video device (index or name)")
+	runCmd.Flags().String("audio-device", "", "Override audio device (index or name)")
 
 	rootCmd.AddCommand(runCmd)
 }
 
-func pickDevice(ffmpeg, resolvedMode string) error {
-	scanner := bufio.NewScanner(os.Stdin)
+var runCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Run the OSC recording daemon",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := mustConfig()
 
-	if resolvedMode == "decklink" {
-		dl := devices.ListDecklink(ffmpeg)
-		if len(dl) == 0 {
-			return fmt.Errorf("Error: No capture devices found. Run 'osc-record devices' for details.")
+		ffmpegPath, err := resolveFFmpegPath(cfg)
+		if err != nil {
+			return err
 		}
-		if len(dl) == 1 {
-			cfg.Device.Name = dl[0]
-			fmt.Printf("Auto-selected device: %s\n", cfg.Device.Name)
-		} else {
-			fmt.Println("No capture device configured. Available devices:")
-			fmt.Println()
-			for i, d := range dl {
-				fmt.Printf("  [%d] %s\n", i+1, d)
-			}
-			fmt.Println()
-			fmt.Printf("Select device [1-%d]: ", len(dl))
-			scanner.Scan()
-			n, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
-			if err != nil || n < 1 || n > len(dl) {
-				return fmt.Errorf("invalid selection")
-			}
-			cfg.Device.Name = dl[n-1]
+
+		cfg, err = applyRunFlagOverrides(cmd, cfg)
+		if err != nil {
+			return err
 		}
+
+		if cfg.OSC.RecordAddress == "" {
+			return errors.New("Error: No record trigger configured. Run 'osc-record capture record' first.")
+		}
+		if cfg.OSC.StopAddress == "" {
+			return errors.New("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
+		}
+
+		mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS)
+		if err != nil {
+			return err
+		}
+		if modeWarning != "" {
+			fmt.Println(modeWarning)
+		}
+
+		deviceInfo, updatedCfg, cfgChanged, err := ensureDevicesConfigured(ffmpegPath, mode, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
+		if err != nil {
+			return err
+		}
+		cfg = updatedCfg
+		if cfgChanged {
+			if err := saveConfig(cfg); err != nil {
+				return err
+			}
+		}
+
+		if runtime.GOOS == "windows" && cfg.Recording.Profile == "prores" {
+			fmt.Println("Warning: ProRes playback on Windows requires QuickTime or VLC.")
+		}
+
+		if mode.Name() == capture.ModeDecklink {
+			if err := mode.SignalProbe(ffmpegPath, deviceInfo.VideoDisplay); err != nil {
+				fmt.Printf("Warning: No valid signal detected on %q. Recording will fail until a signal is present.\n", deviceInfo.VideoDisplay)
+			}
+		}
+
+		outDir := outputDir(cfg)
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return fmt.Errorf("Error: Output directory %s does not exist and could not be created: %v.", outDir, err)
+		}
+
+		triggerCh := make(chan oscpkg.Message, 16)
+		listener, err := oscpkg.Listen(cfg.OSC.Port, func(message oscpkg.Message) {
+			select {
+			case triggerCh <- message:
+			default:
+			}
+		})
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+
+		rec := recorder.New(ffmpegPath, platform.Current())
+
+		printRunSummary(cfg, mode, deviceInfo.VideoDisplay)
+		fmt.Println()
+		fmt.Println("Waiting for record trigger...")
+
+		ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stopSignals()
+
+		for {
+			select {
+			case <-ctx.Done():
+				if rec.IsRecording() {
+					exit, err := rec.StopAndWait(context.Background())
+					if err != nil {
+						return err
+					}
+					if exit.Filename != "" {
+						fmt.Printf("Recording saved: %s\n", exit.Filename)
+					}
+				}
+				return nil
+			case exit := <-rec.UnexpectedExit():
+				fmt.Printf("Error: ffmpeg exited unexpectedly (code %d). Waiting for record trigger...\n", exit.Code)
+			case message := <-triggerCh:
+				verbosef("OSC %s %v", message.Address, message.Arguments)
+
+				switch message.Address {
+				case cfg.OSC.RecordAddress:
+					if rec.IsRecording() {
+						fmt.Println("Warning: Record trigger received but already recording. Ignoring.")
+						continue
+					}
+
+					filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, verbose)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Recording started: %s\n", filename)
+				case cfg.OSC.StopAddress:
+					if !rec.IsRecording() {
+						fmt.Println("Warning: Stop trigger received but not recording. Ignoring.")
+						continue
+					}
+
+					exit, err := rec.StopAndWait(context.Background())
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Recording saved: %s\n", exit.Filename)
+					fmt.Println("Waiting for record trigger...")
+				}
+			}
+		}
+	},
+}
+
+type selectedDevices struct {
+	VideoDisplay     string
+	VideoConfigValue string
+	AudioDisplay     string
+	AudioConfigValue string
+}
+
+func applyRunFlagOverrides(cmd *cobra.Command, cfg cfgpkg.Config) (cfgpkg.Config, error) {
+	if cmd.Flags().Changed("prefix") {
+		value, _ := cmd.Flags().GetString("prefix")
+		cfg.Recording.Prefix = value
+	}
+	if cmd.Flags().Changed("profile") {
+		value, _ := cmd.Flags().GetString("profile")
+		if !recorder.ValidProfile(value) {
+			return cfg, fmt.Errorf("Error: Invalid profile %q. Use prores, hevc, or h264.", value)
+		}
+		cfg.Recording.Profile = value
+	}
+	if cmd.Flags().Changed("output") {
+		value, _ := cmd.Flags().GetString("output")
+		cfg.Recording.OutputDir = value
+	}
+	if cmd.Flags().Changed("port") {
+		value, _ := cmd.Flags().GetInt("port")
+		cfg.OSC.Port = value
+	}
+	if cmd.Flags().Changed("capture-mode") {
+		value, _ := cmd.Flags().GetString("capture-mode")
+		cfg.Device.CaptureMode = value
+	}
+	if cmd.Flags().Changed("video-device") {
+		value, _ := cmd.Flags().GetString("video-device")
+		cfg.Device.Name = value
+	}
+	if cmd.Flags().Changed("audio-device") {
+		value, _ := cmd.Flags().GetString("audio-device")
+		cfg.Device.Audio = value
+	}
+	return cfg, nil
+}
+
+func ensureDevicesConfigured(ffmpegPath string, mode capture.CaptureMode, cfg cfgpkg.Config, videoOverride, audioOverride bool) (selectedDevices, cfgpkg.Config, bool, error) {
+	var changed bool
+
+	group, err := devices.ProbeMode(ffmpegPath, mode.Name())
+	if err != nil {
+		return selectedDevices{}, cfg, false, err
+	}
+
+	selected := selectedDevices{}
+	if cfg.Device.Name == "" && !videoOverride {
+		video, err := promptForDevice(group.Video, "capture device", mode.Name() == capture.ModeDecklink)
+		if err != nil {
+			return selectedDevices{}, cfg, false, err
+		}
+		cfg.Device.Name = video.ConfigValue()
+		selected.VideoDisplay = video.Name
+		selected.VideoConfigValue = video.ConfigValue()
+		changed = true
 	} else {
-		var video, audio []string
-		if runtime.GOOS == "windows" {
-			video, audio = devices.ListDShow(ffmpeg)
+		video, err := devices.MatchDevice(group.Video, cfg.Device.Name)
+		if err != nil {
+			return selectedDevices{}, cfg, false, fmt.Errorf("Error: Video device %q not found. Run 'osc-record devices' to list available devices.", cfg.Device.Name)
+		}
+		selected.VideoDisplay = video.Name
+		selected.VideoConfigValue = cfg.Device.Name
+	}
+
+	if mode.NeedsAudio() {
+		if cfg.Device.Audio == "" && !audioOverride {
+			audio, err := promptForDevice(group.Audio, "audio device", false)
+			if err != nil {
+				return selectedDevices{}, cfg, false, err
+			}
+			cfg.Device.Audio = audio.ConfigValue()
+			selected.AudioDisplay = audio.Name
+			selected.AudioConfigValue = audio.ConfigValue()
+			changed = true
 		} else {
-			video, audio = devices.ListAVFoundation(ffmpeg)
-		}
-		if len(video) == 0 {
-			return fmt.Errorf("Error: No capture devices found. Run 'osc-record devices' for details.")
-		}
-		if len(video) == 1 {
-			cfg.Device.Name = video[0]
-			fmt.Printf("Auto-selected video device: %s\n", cfg.Device.Name)
-		} else {
-			fmt.Println("No capture device configured. Available video devices:")
-			fmt.Println()
-			for i, d := range video {
-				fmt.Printf("  [%d] %s\n", i+1, d)
+			audio, err := devices.MatchDevice(group.Audio, cfg.Device.Audio)
+			if err != nil {
+				return selectedDevices{}, cfg, false, fmt.Errorf("Error: Audio device %q not found. Run 'osc-record devices' to list available devices.", cfg.Device.Audio)
 			}
-			fmt.Println()
-			fmt.Printf("Select video device [1-%d]: ", len(video))
-			scanner.Scan()
-			n, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
-			if err != nil || n < 1 || n > len(video) {
-				return fmt.Errorf("invalid selection")
-			}
-			cfg.Device.Name = video[n-1]
-		}
-		if len(audio) == 1 {
-			cfg.Device.Audio = audio[0]
-			fmt.Printf("Auto-selected audio device: %s\n", cfg.Device.Audio)
-		} else if len(audio) > 1 {
-			fmt.Println()
-			fmt.Println("Available audio devices:")
-			fmt.Println()
-			for i, d := range audio {
-				fmt.Printf("  [%d] %s\n", i+1, d)
-			}
-			fmt.Println()
-			fmt.Printf("Select audio device [1-%d]: ", len(audio))
-			scanner.Scan()
-			n, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
-			if err != nil || n < 1 || n > len(audio) {
-				return fmt.Errorf("invalid selection")
-			}
-			cfg.Device.Audio = audio[n-1]
+			selected.AudioDisplay = audio.Name
+			selected.AudioConfigValue = cfg.Device.Audio
 		}
 	}
 
-	return config.Save(cfgPath, cfg)
+	return selected, cfg, changed, nil
 }
 
-func buildFallbackMode(videoDevice, audioDevice string) capture.Mode {
-	return capture.NewFallbackMode(videoDevice, audioDevice)
+func promptForDevice(items []devices.Device, label string, singlePrompt bool) (devices.Device, error) {
+	if len(items) == 0 {
+		return devices.Device{}, errors.New("Error: No capture devices found. Run 'osc-record devices' for details.")
+	}
+	if len(items) == 1 {
+		fmt.Printf("Auto-selected device: %s\n", items[0].Name)
+		return items[0], nil
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	if singlePrompt {
+		fmt.Println("No capture device configured. Available devices:")
+	} else if strings.Contains(label, "audio") {
+		fmt.Println("Available audio devices:")
+	} else {
+		fmt.Println("No capture device configured. Available video devices:")
+	}
+	fmt.Println()
+
+	for i, item := range items {
+		fmt.Printf("  [%d] %s\n", i+1, item.Name)
+	}
+	fmt.Println()
+
+	for {
+		switch {
+		case strings.Contains(label, "audio"):
+			fmt.Printf("Select audio device [1-%d]: ", len(items))
+		case singlePrompt:
+			fmt.Printf("Select device [1-%d]: ", len(items))
+		default:
+			fmt.Printf("Select video device [1-%d]: ", len(items))
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return devices.Device{}, err
+		}
+		index, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil || index < 1 || index > len(items) {
+			fmt.Println("Invalid selection.")
+			continue
+		}
+		return items[index-1], nil
+	}
+}
+
+func printRunSummary(cfg cfgpkg.Config, mode capture.CaptureMode, deviceName string) {
+	fmt.Println("osc-record running")
+	fmt.Printf("  OSC port:    %d\n", cfg.OSC.Port)
+	fmt.Printf("  Record:      %s\n", cfg.OSC.RecordAddress)
+	fmt.Printf("  Stop:        %s\n", cfg.OSC.StopAddress)
+	fmt.Printf("  Capture:     %s\n", mode.Summary())
+	fmt.Printf("  Profile:     %s\n", cfg.Recording.Profile)
+	fmt.Printf("  Prefix:      %s\n", cfg.Recording.Prefix)
+	fmt.Printf("  Output:      %s\n", outputDir(cfg))
+	fmt.Printf("  Device:      %s\n", deviceName)
 }

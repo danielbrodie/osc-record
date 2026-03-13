@@ -2,19 +2,24 @@ package capture
 
 import "fmt"
 
-type AVFoundationMode struct {
-	VideoDevice string
-	AudioDevice string
+type AVFoundationMode struct{}
+
+func (AVFoundationMode) Name() string {
+	return ModeAVFoundation
 }
 
-func (a *AVFoundationMode) InputArgs() []string {
-	return []string{"-f", "avfoundation", "-framerate", "29.97", "-pixel_format", "uyvy422"}
-}
-
-func (a *AVFoundationMode) InputDevice() string {
-	return fmt.Sprintf("%s:%s", a.VideoDevice, a.AudioDevice)
-}
-
-func (a *AVFoundationMode) Name() string {
+func (AVFoundationMode) Summary() string {
 	return "avfoundation (manual format)"
+}
+
+func (AVFoundationMode) BuildInputArgs(videoDevice, audioDevice string) []string {
+	return []string{"-f", "avfoundation", "-framerate", "29.97", "-pixel_format", "uyvy422", "-i", fmt.Sprintf("%s:%s", videoDevice, audioDevice)}
+}
+
+func (AVFoundationMode) NeedsAudio() bool {
+	return true
+}
+
+func (AVFoundationMode) SignalProbe(ffmpegPath, device string) error {
+	return nil
 }

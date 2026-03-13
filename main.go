@@ -1,9 +1,18 @@
 package main
 
-import "github.com/brodiegraphics/osc-record/cmd"
+import (
+	"fmt"
+	"os"
+
+	"github.com/brodiegraphics/osc-record/cmd"
+)
 
 var version = "0.1.0"
 
 func main() {
-	cmd.Execute(version)
+	cmd.SetVersion(version)
+	if err := cmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

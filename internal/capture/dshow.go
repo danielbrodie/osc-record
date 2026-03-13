@@ -2,19 +2,24 @@ package capture
 
 import "fmt"
 
-type DShowMode struct {
-	VideoDevice string
-	AudioDevice string
+type DShowMode struct{}
+
+func (DShowMode) Name() string {
+	return ModeDShow
 }
 
-func (d *DShowMode) InputArgs() []string {
-	return []string{"-f", "dshow"}
-}
-
-func (d *DShowMode) InputDevice() string {
-	return fmt.Sprintf("video=%s:audio=%s", d.VideoDevice, d.AudioDevice)
-}
-
-func (d *DShowMode) Name() string {
+func (DShowMode) Summary() string {
 	return "dshow (manual format)"
+}
+
+func (DShowMode) BuildInputArgs(videoDevice, audioDevice string) []string {
+	return []string{"-f", "dshow", "-i", fmt.Sprintf("video=%q:audio=%q", videoDevice, audioDevice)}
+}
+
+func (DShowMode) NeedsAudio() bool {
+	return true
+}
+
+func (DShowMode) SignalProbe(ffmpegPath, device string) error {
+	return nil
 }

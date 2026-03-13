@@ -8,12 +8,14 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(&cobra.Command{
-		Use:   "config",
-		Short: "Print resolved configuration",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			enc := toml.NewEncoder(os.Stdout)
-			return enc.Encode(cfg)
-		},
-	})
+	rootCmd.AddCommand(configCmd)
+}
+
+var configCmd = &cobra.Command{
+	Use:   "config",
+	Short: "Print the resolved configuration",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := mustConfig()
+		return toml.NewEncoder(os.Stdout).Encode(cfg)
+	},
 }

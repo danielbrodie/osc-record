@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -60,46 +62,70 @@ func Defaults() Config {
 	}
 }
 
-func ConfigPath() string {
+func ConfigPath() (string, error) {
 	if runtime.GOOS == "windows" {
-		appData := os.Getenv("APPDATA")
-		return filepath.Join(appData, "osc-record", "config.toml")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "osc-record", "config.toml")
-}
-
-func Load(path string) (Config, error) {
-	cfg := Defaults()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err2 := Save(path, cfg); err2 != nil {
-			return cfg, err2
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "osc-record", "config.toml"), nil
 		}
-		return cfg, nil
 	}
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
-}
 
-func Save(path string, cfg Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer f.Close()
-	enc := toml.NewEncoder(f)
-	return enc.Encode(cfg)
+	return filepath.Join(home, ".config", "osc-record", "config.toml"), nil
 }
 
-func ExpandTilde(path string) string {
-	if len(path) >= 2 && path[:2] == "~/" {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, path[2:])
+func Load(path string) (*Config, error) {
+	resolvedPath := ExpandPath(path)
+	cfg := Defaults()
+
+	if _, err := os.Stat(resolvedPath); err != nil {
+		if os.IsNotExist(err) {
+			if err := Save(resolvedPath, &cfg); err != nil {
+				return nil, err
+			}
+			return &cfg, nil
+		}
+		return nil, err
+	}
+
+	if _, err := toml.DecodeFile(resolvedPath, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+func Save(path string, cfg *Config) error {
+	resolvedPath := ExpandPath(path)
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
+		return err
+	}
+
+	var buffer bytes.Buffer
+	if err := toml.NewEncoder(&buffer).Encode(cfg); err != nil {
+		return err
+	}
+
+	return os.WriteFile(resolvedPath, buffer.Bytes(), 0o644)
+}
+
+func ExpandPath(path string) string {
+	if path == "" {
+		return path
+	}
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, path[2:])
+		}
 	}
 	return path
 }

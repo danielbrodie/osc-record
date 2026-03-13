@@ -2,71 +2,86 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 
-	"github.com/brodiegraphics/osc-record/internal/config"
-	osclib "github.com/brodiegraphics/osc-record/internal/osc"
 	"github.com/spf13/cobra"
+
+	oscpkg "github.com/brodiegraphics/osc-record/internal/osc"
 )
 
 func init() {
 	captureCmd := &cobra.Command{
 		Use:   "capture",
-		Short: "Configure OSC trigger addresses",
+		Short: "Capture OSC trigger addresses",
 	}
-	captureCmd.AddCommand(makeCaptureLearnCmd("record"))
-	captureCmd.AddCommand(makeCaptureLearnCmd("stop"))
+
+	captureCmd.AddCommand(
+		newCaptureAddressCmd("record", "record"),
+		newCaptureAddressCmd("stop", "stop"),
+	)
+
 	rootCmd.AddCommand(captureCmd)
 }
 
-func makeCaptureLearnCmd(name string) *cobra.Command {
+func newCaptureAddressCmd(name, field string) *cobra.Command {
 	return &cobra.Command{
 		Use:   name,
-		Short: fmt.Sprintf("Learn the OSC address for the %s trigger", name),
+		Short: fmt.Sprintf("Capture the %s OSC address", name),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			port := cfg.OSC.Port
-			fmt.Printf("Listening for OSC on port %d... Press Enter to select, Ctrl+C to cancel.\n\n", port)
+			cfg := mustConfig()
 
-			var mu sync.Mutex
-			var lastAddr string
+			fmt.Printf("Listening for OSC on port %d... Press Enter to select, Ctrl+C to cancel.\n\n", cfg.OSC.Port)
 
-			srv := osclib.NewServer(port, func(addr string, _ []interface{}) {
+			var (
+				mu          sync.Mutex
+				lastAddress string
+			)
+
+			listener, err := oscpkg.Listen(cfg.OSC.Port, func(message oscpkg.Message) {
 				mu.Lock()
-				lastAddr = addr
+				lastAddress = message.Address
 				mu.Unlock()
-				fmt.Printf("  %s []        <-- most recent\n", addr)
-			})
-			go srv.ListenAndServe() //nolint:errcheck
 
-			scanner := bufio.NewScanner(os.Stdin)
-			scanner.Scan()
+				fmt.Printf("  %s %v        <-- most recent\n", message.Address, message.Arguments)
+			})
+			if err != nil {
+				return err
+			}
+			defer listener.Close()
+
+			reader := bufio.NewReader(os.Stdin)
+			if _, err := reader.ReadString('\n'); err != nil {
+				return err
+			}
 
 			mu.Lock()
-			selected := lastAddr
+			address := lastAddress
 			mu.Unlock()
-
-			if selected == "" {
-				return fmt.Errorf("no OSC message received")
+			if address == "" {
+				return errors.New("Error: No OSC messages received. Nothing saved.")
 			}
 
-			switch name {
+			switch field {
 			case "record":
-				cfg.OSC.RecordAddress = selected
+				cfg.OSC.RecordAddress = address
 			case "stop":
-				cfg.OSC.StopAddress = selected
+				cfg.OSC.StopAddress = address
+			default:
+				return errors.New("unsupported capture field")
 			}
 
-			if err := config.Save(cfgPath, cfg); err != nil {
-				return fmt.Errorf("could not save config: %w", err)
+			if err := saveConfig(cfg); err != nil {
+				return err
 			}
 
-			switch name {
+			switch field {
 			case "record":
-				fmt.Printf("Saved record trigger: %s\n", selected)
+				fmt.Printf("Saved record trigger: %s\n", address)
 			case "stop":
-				fmt.Printf("Saved stop trigger: %s\n", selected)
+				fmt.Printf("Saved stop trigger: %s\n", address)
 			}
 			return nil
 		},

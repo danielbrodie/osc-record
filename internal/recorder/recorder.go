@@ -1,104 +1,204 @@
 package recorder
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brodiegraphics/osc-record/internal/capture"
 	"github.com/brodiegraphics/osc-record/internal/platform"
 )
 
-var unsafeChars = regexp.MustCompile(`[/\\:*?"<>|]`)
-
-func SanitizePrefix(prefix string) string {
-	return unsafeChars.ReplaceAllString(prefix, "")
-}
-
-func OutputFilename(prefix, profile string) string {
-	ext := "mp4"
-	if strings.ToLower(profile) == "prores" {
-		ext = "mov"
-	}
-	ts := time.Now().Format("2006-01-02-150405")
-	return fmt.Sprintf("%s-%s.%s", SanitizePrefix(prefix), ts, ext)
+type ExitStatus struct {
+	Code     int
+	Filename string
+	Path     string
 }
 
 type Recorder struct {
-	FFmpegPath  string
-	OutputDir   string
-	Prefix      string
-	Profile     string
-	Mode        capture.Mode
-	Stopper     platform.Stopper
+	ffmpegPath      string
+	stopper         platform.Stopper
+	mu              sync.Mutex
+	current         *recording
+	unexpectedExitC chan ExitStatus
+}
 
-	cmd         *exec.Cmd
-	currentFile string
+type recording struct {
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	filename      string
+	path          string
+	stopRequested bool
+	done          chan ExitStatus
+}
+
+func New(ffmpegPath string, stopper platform.Stopper) *Recorder {
+	return &Recorder{
+		ffmpegPath:      ffmpegPath,
+		stopper:         stopper,
+		unexpectedExitC: make(chan ExitStatus, 1),
+	}
+}
+
+func (r *Recorder) UnexpectedExit() <-chan ExitStatus {
+	return r.unexpectedExitC
 }
 
 func (r *Recorder) IsRecording() bool {
-	return r.cmd != nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.current != nil
 }
 
-func (r *Recorder) Start() (string, error) {
-	filename := OutputFilename(r.Prefix, r.Profile)
-	outputPath := filepath.Join(r.OutputDir, filename)
+func (r *Recorder) Start(mode capture.CaptureMode, profile, videoDevice, audioDevice, prefix, outDir string, verbose bool) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	args := r.Mode.InputArgs()
-	args = append(args, "-i", r.Mode.InputDevice())
-	args = append(args, r.profileArgs(outputPath)...)
+	if r.current != nil {
+		return "", fmt.Errorf("recording already active")
+	}
 
-	r.cmd = exec.Command(r.FFmpegPath, args...)
-	if err := r.cmd.Start(); err != nil {
-		r.cmd = nil
+	filename := buildFilename(prefix, profile)
+	fullPath := filepath.Join(outDir, filename)
+
+	args, err := buildArgs(mode, profile, videoDevice, audioDevice, fullPath)
+	if err != nil {
 		return "", err
 	}
-	r.currentFile = filename
+
+	cmd := exec.Command(r.ffmpegPath, args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return "", err
+	}
+	if verbose {
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	rec := &recording{
+		cmd:      cmd,
+		stdin:    stdin,
+		filename: filename,
+		path:     fullPath,
+		done:     make(chan ExitStatus, 1),
+	}
+	r.current = rec
+
+	go r.wait(rec)
 	return filename, nil
 }
 
-func (r *Recorder) Stop() (string, error) {
-	if r.cmd == nil {
-		return "", nil
+func (r *Recorder) StopAndWait(ctx context.Context) (ExitStatus, error) {
+	r.mu.Lock()
+	rec := r.current
+	if rec == nil {
+		r.mu.Unlock()
+		return ExitStatus{}, fmt.Errorf("not recording")
 	}
-	if err := r.Stopper.Stop(r.cmd); err != nil {
-		return "", err
+	rec.stopRequested = true
+	r.mu.Unlock()
+
+	if err := r.stopper.Stop(rec.cmd, rec.stdin); err != nil {
+		return ExitStatus{}, err
 	}
-	_ = r.cmd.Wait()
-	f := r.currentFile
-	r.cmd = nil
-	r.currentFile = ""
-	return f, nil
+
+	select {
+	case status := <-rec.done:
+		return status, nil
+	case <-ctx.Done():
+		return ExitStatus{}, ctx.Err()
+	}
 }
 
-// WatchExit monitors ffmpeg in a goroutine and calls onExit if it exits unexpectedly.
-// The caller must only invoke this while holding any relevant mutex, and onExit
-// will be called without holding it.
-func (r *Recorder) WatchExit(onExit func(code int)) {
-	cmd := r.cmd
-	go func() {
-		if cmd == nil {
-			return
-		}
-		state, _ := cmd.Process.Wait()
-		code := 0
-		if state != nil {
-			code = state.ExitCode()
-		}
-		onExit(code)
-	}()
+func ValidProfile(profile string) bool {
+	switch profile {
+	case "prores", "h264", "hevc":
+		return true
+	default:
+		return false
+	}
 }
 
-func (r *Recorder) profileArgs(outputPath string) []string {
-	switch strings.ToLower(r.Profile) {
+func buildArgs(mode capture.CaptureMode, profile, videoDevice, audioDevice, output string) ([]string, error) {
+	if !ValidProfile(profile) {
+		return nil, fmt.Errorf("invalid profile %q", profile)
+	}
+
+	args := append([]string{}, mode.BuildInputArgs(videoDevice, audioDevice)...)
+	switch profile {
 	case "prores":
-		return []string{"-c:v", "prores_ks", "-profile:v", "1", "-c:a", "pcm_s16le", outputPath}
+		args = append(args, "-c:v", "prores_ks", "-profile:v", "1", "-c:a", "pcm_s16le")
+	case "h264":
+		args = append(args, "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-c:a", "aac", "-b:a", "192k")
 	case "hevc":
-		return []string{"-c:v", "libx265", "-crf", "22", "-preset", "fast", "-c:a", "aac", "-b:a", "192k", outputPath}
-	default: // h264
-		return []string{"-c:v", "libx264", "-crf", "18", "-preset", "fast", "-c:a", "aac", "-b:a", "192k", outputPath}
+		args = append(args, "-c:v", "libx265", "-crf", "22", "-preset", "fast", "-c:a", "aac", "-b:a", "192k")
+	}
+	args = append(args, output)
+	return args, nil
+}
+
+func buildFilename(prefix, profile string) string {
+	safePrefix := sanitizePrefix(prefix)
+	if safePrefix == "" {
+		safePrefix = "recording"
+	}
+	return fmt.Sprintf("%s-%s%s", safePrefix, time.Now().Format("2006-01-02-150405"), extensionForProfile(profile))
+}
+
+func extensionForProfile(profile string) string {
+	if profile == "prores" {
+		return ".mov"
+	}
+	return ".mp4"
+}
+
+func sanitizePrefix(value string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return -1
+		default:
+			return r
+		}
+	}, value)
+}
+
+func (r *Recorder) wait(rec *recording) {
+	_ = rec.cmd.Wait()
+	code := 0
+	if rec.cmd.ProcessState != nil {
+		code = rec.cmd.ProcessState.ExitCode()
+	}
+
+	status := ExitStatus{
+		Code:     code,
+		Filename: rec.filename,
+		Path:     rec.path,
+	}
+
+	r.mu.Lock()
+	if r.current == rec {
+		r.current = nil
+	}
+	stopRequested := rec.stopRequested
+	r.mu.Unlock()
+
+	rec.done <- status
+	if !stopRequested {
+		select {
+		case r.unexpectedExitC <- status:
+		default:
+		}
 	}
 }

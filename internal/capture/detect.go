@@ -1,31 +1,82 @@
 package capture
 
 import (
-	"os/exec"
-	"runtime"
-	"strings"
+	"fmt"
+
+	"github.com/brodiegraphics/osc-record/internal/devices"
 )
 
-// SupportsDecklink returns true if ffmpeg supports the decklink input format.
-func SupportsDecklink(ffmpegPath string) bool {
-	cmd := exec.Command(ffmpegPath, "-f", "decklink", "-list_devices", "true", "-i", "")
-	out, _ := cmd.CombinedOutput()
-	return !strings.Contains(string(out), "Unknown input format")
+func ResolveMode(requested, ffmpegPath, goos string) (CaptureMode, string, error) {
+	switch requested {
+	case "", ModeAuto:
+		supported, err := devices.HasDecklinkSupport(ffmpegPath)
+		if err != nil {
+			return nil, "", err
+		}
+		if supported {
+			return DecklinkMode{}, "", nil
+		}
+		fallback := fallbackMode(goos)
+		return newMode(fallback), warningForFallback(fallback), nil
+	case ModeDecklink:
+		supported, err := devices.HasDecklinkSupport(ffmpegPath)
+		if err != nil {
+			return nil, "", err
+		}
+		if !supported {
+			return nil, "", fmt.Errorf("Error: Capture mode set to %q but ffmpeg was not compiled with decklink support. Install ffmpeg with --with-decklink or set capture_mode to %q.", ModeDecklink, ModeAuto)
+		}
+		return DecklinkMode{}, "", nil
+	case ModeAVFoundation, ModeDShow:
+		if !modeSupportedOnOS(requested, goos) {
+			return nil, "", fmt.Errorf("Error: Capture mode %q is not supported on %s.", requested, goos)
+		}
+		return newMode(requested), "", nil
+	default:
+		return nil, "", fmt.Errorf("Error: Invalid capture mode %q.", requested)
+	}
 }
 
-// ResolveMode determines the best capture mode given the config and ffmpeg path.
-// It never prompts the user — mode selection is automatic (decklink wins if supported).
-func ResolveMode(ffmpegPath, configuredMode string) string {
-	switch configuredMode {
-	case "decklink", "avfoundation", "dshow":
-		return configuredMode
-	default: // "auto"
-		if SupportsDecklink(ffmpegPath) {
-			return "decklink"
-		}
-		if runtime.GOOS == "windows" {
-			return "dshow"
-		}
-		return "avfoundation"
+func newMode(name string) CaptureMode {
+	switch name {
+	case ModeDecklink:
+		return DecklinkMode{}
+	case ModeAVFoundation:
+		return AVFoundationMode{}
+	case ModeDShow:
+		return DShowMode{}
+	default:
+		return nil
+	}
+}
+
+func fallbackMode(goos string) string {
+	if goos == "windows" {
+		return ModeDShow
+	}
+	return ModeAVFoundation
+}
+
+func modeSupportedOnOS(mode, goos string) bool {
+	switch mode {
+	case ModeDecklink:
+		return true
+	case ModeAVFoundation:
+		return goos == "darwin"
+	case ModeDShow:
+		return goos == "windows"
+	default:
+		return false
+	}
+}
+
+func warningForFallback(mode string) string {
+	switch mode {
+	case ModeAVFoundation:
+		return "Warning: ffmpeg does not support decklink input format. Falling back to avfoundation. For auto-detect signal support, install ffmpeg with --with-decklink."
+	case ModeDShow:
+		return "Warning: ffmpeg does not support decklink input format. Falling back to dshow. For auto-detect signal support, install ffmpeg with --with-decklink."
+	default:
+		return ""
 	}
 }

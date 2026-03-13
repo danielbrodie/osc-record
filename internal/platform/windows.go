@@ -3,18 +3,20 @@
 package platform
 
 import (
-	"fmt"
+	"io"
 	"os/exec"
 )
 
 type windowsStopper struct{}
 
-func newStopper() Stopper { return &windowsStopper{} }
+func Current() Stopper {
+	return windowsStopper{}
+}
 
-func (w *windowsStopper) Stop(cmd *exec.Cmd) error {
-	if cmd.Stdin == nil {
-		return fmt.Errorf("ffmpeg stdin pipe not available")
+func (windowsStopper) Stop(cmd *exec.Cmd, stdin io.WriteCloser) error {
+	if stdin == nil {
+		return nil
 	}
-	_, err := fmt.Fprintf(cmd.Stdin, "q")
+	_, err := io.WriteString(stdin, "q\n")
 	return err
 }

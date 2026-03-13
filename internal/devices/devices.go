@@ -1,115 +1,230 @@
 package devices
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"os/exec"
-	"runtime"
+	"regexp"
 	"strings"
 )
 
-type DeviceList struct {
-	DecklinkDevices []string
-	VideoDevices    []string
-	AudioDevices    []string
-	Mode            string // "decklink" or "avfoundation" or "dshow"
+const (
+	ModeDecklink     = "decklink"
+	ModeAVFoundation = "avfoundation"
+	ModeDShow        = "dshow"
+)
+
+var errUnsupportedInput = errors.New("unsupported ffmpeg input format")
+
+type Device struct {
+	ID   string
+	Name string
 }
 
-func ListDecklink(ffmpegPath string) []string {
-	cmd := exec.Command(ffmpegPath, "-f", "decklink", "-list_devices", "true", "-i", "")
-	out, _ := cmd.CombinedOutput()
-	if strings.Contains(string(out), "Unknown input format") {
-		return nil
+func (d Device) ConfigValue() string {
+	if d.ID != "" {
+		return d.ID
 	}
-	var devices []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		// ffmpeg decklink device lines start with a device name after the log prefix
-		if strings.Contains(line, "decklink") && strings.Contains(line, "@") {
-			// Parse: "[decklink @ 0x...] <device name>"
-			if idx := strings.Index(line, "] "); idx >= 0 {
-				name := strings.TrimSpace(line[idx+2:])
-				if name != "" && !strings.HasPrefix(name, "decklink") {
-					devices = append(devices, name)
-				}
+	return d.Name
+}
+
+type Group struct {
+	Mode  string
+	Video []Device
+	Audio []Device
+}
+
+func (g Group) ModeDescription() string {
+	switch g.Mode {
+	case ModeDecklink:
+		return "decklink (auto-detect signal format)"
+	case ModeAVFoundation:
+		return "avfoundation (manual format required)"
+	case ModeDShow:
+		return "dshow (manual format required)"
+	default:
+		return g.Mode
+	}
+}
+
+func ProbeForPlatform(ffmpegPath, goos string) ([]Group, error) {
+	groups := make([]Group, 0, 2)
+
+	if group, err := ProbeMode(ffmpegPath, ModeDecklink); err == nil {
+		groups = append(groups, group)
+	} else if !errors.Is(err, errUnsupportedInput) {
+		return nil, err
+	}
+
+	group, err := ProbeMode(ffmpegPath, fallbackMode(goos))
+	if err != nil {
+		return nil, err
+	}
+	groups = append(groups, group)
+	return groups, nil
+}
+
+func ProbeMode(ffmpegPath, mode string) (Group, error) {
+	switch mode {
+	case ModeDecklink:
+		output, err := runListCommand(ffmpegPath, []string{"-hide_banner", "-f", "decklink", "-list_devices", "true", "-i", ""})
+		if strings.Contains(output, "Unknown input format") {
+			return Group{}, errUnsupportedInput
+		}
+		if err != nil && len(strings.TrimSpace(output)) == 0 {
+			return Group{}, err
+		}
+		return Group{Mode: ModeDecklink, Video: parseDecklink(output)}, nil
+	case ModeAVFoundation:
+		output, err := runListCommand(ffmpegPath, []string{"-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""})
+		if err != nil && len(strings.TrimSpace(output)) == 0 {
+			return Group{}, err
+		}
+		video, audio := parseAVFoundation(output)
+		return Group{Mode: ModeAVFoundation, Video: video, Audio: audio}, nil
+	case ModeDShow:
+		output, err := runListCommand(ffmpegPath, []string{"-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy"})
+		if err != nil && len(strings.TrimSpace(output)) == 0 {
+			return Group{}, err
+		}
+		video, audio := parseDShow(output)
+		return Group{Mode: ModeDShow, Video: video, Audio: audio}, nil
+	default:
+		return Group{}, fmt.Errorf("unsupported capture mode %q", mode)
+	}
+}
+
+func HasDecklinkSupport(ffmpegPath string) (bool, error) {
+	output, err := runListCommand(ffmpegPath, []string{"-hide_banner", "-f", "decklink", "-list_devices", "true", "-i", ""})
+	if strings.Contains(output, "Unknown input format") {
+		return false, nil
+	}
+	if err != nil && len(strings.TrimSpace(output)) == 0 {
+		return false, err
+	}
+	return true, nil
+}
+
+func MatchDevice(items []Device, value string) (Device, error) {
+	for _, item := range items {
+		if item.ID != "" && item.ID == value {
+			return item, nil
+		}
+		if strings.EqualFold(item.Name, value) {
+			return item, nil
+		}
+	}
+	return Device{}, errors.New("device not found")
+}
+
+func fallbackMode(goos string) string {
+	if goos == "windows" {
+		return ModeDShow
+	}
+	return ModeAVFoundation
+}
+
+func runListCommand(ffmpegPath string, args []string) (string, error) {
+	cmd := exec.Command(ffmpegPath, args...)
+	var buffer bytes.Buffer
+	cmd.Stdout = &buffer
+	cmd.Stderr = &buffer
+	err := cmd.Run()
+	return buffer.String(), err
+}
+
+func parseDecklink(output string) []Device {
+	quotePattern := regexp.MustCompile(`['"]([^'"]+)['"]`)
+	lines := strings.Split(output, "\n")
+	items := make([]Device, 0)
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "blackmagic decklink devices") {
+			continue
+		}
+		matches := quotePattern.FindStringSubmatch(line)
+		if len(matches) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(matches[1])
+		if name == "" || strings.Contains(strings.ToLower(line), "could not list") {
+			continue
+		}
+		items = append(items, Device{Name: name})
+	}
+	return uniqueDevices(items)
+}
+
+func parseAVFoundation(output string) ([]Device, []Device) {
+	indexPattern := regexp.MustCompile(`\[(\d+)\]\s+(.+)$`)
+	lines := strings.Split(output, "\n")
+	section := ""
+	video := make([]Device, 0)
+	audio := make([]Device, 0)
+
+	for _, line := range lines {
+		switch {
+		case strings.Contains(line, "AVFoundation video devices"):
+			section = "video"
+		case strings.Contains(line, "AVFoundation audio devices"):
+			section = "audio"
+		default:
+			matches := indexPattern.FindStringSubmatch(strings.TrimSpace(line))
+			if len(matches) != 3 {
+				continue
+			}
+			item := Device{ID: matches[1], Name: strings.TrimSpace(matches[2])}
+			if section == "video" {
+				video = append(video, item)
+			} else if section == "audio" {
+				audio = append(audio, item)
 			}
 		}
 	}
-	return devices
+
+	return video, audio
 }
 
-func ListAVFoundation(ffmpegPath string) (video []string, audio []string) {
-	cmd := exec.Command(ffmpegPath, "-f", "avfoundation", "-list_devices", "true", "-i", "")
-	out, _ := cmd.CombinedOutput()
-	inAudio := false
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "AVFoundation audio devices") {
-			inAudio = true
-			continue
-		}
-		if strings.Contains(line, "AVFoundation video devices") {
-			inAudio = false
-			continue
-		}
-		if strings.Contains(line, "[AVFoundation") && strings.Contains(line, "] [") {
-			// Parse: "[AVFoundation indev @ 0x...] [0] Device Name"
-			if idx := strings.LastIndex(line, "] "); idx >= 0 {
-				name := strings.TrimSpace(line[idx+2:])
-				if name != "" {
-					if inAudio {
-						audio = append(audio, name)
-					} else {
-						video = append(video, name)
-					}
-				}
+func parseDShow(output string) ([]Device, []Device) {
+	quotePattern := regexp.MustCompile(`"([^"]+)"`)
+	lines := strings.Split(output, "\n")
+	section := ""
+	video := make([]Device, 0)
+	audio := make([]Device, 0)
+
+	for _, line := range lines {
+		switch {
+		case strings.Contains(line, "DirectShow video devices"):
+			section = "video"
+		case strings.Contains(line, "DirectShow audio devices"):
+			section = "audio"
+		default:
+			matches := quotePattern.FindStringSubmatch(line)
+			if len(matches) != 2 {
+				continue
+			}
+			item := Device{Name: strings.TrimSpace(matches[1])}
+			if section == "video" {
+				video = append(video, item)
+			} else if section == "audio" {
+				audio = append(audio, item)
 			}
 		}
 	}
-	return
+
+	return uniqueDevices(video), uniqueDevices(audio)
 }
 
-func ListDShow(ffmpegPath string) (video []string, audio []string) {
-	cmd := exec.Command(ffmpegPath, "-f", "dshow", "-list_devices", "true", "-i", "dummy")
-	out, _ := cmd.CombinedOutput()
-	inAudio := false
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "DirectShow audio devices") {
-			inAudio = true
+func uniqueDevices(items []Device) []Device {
+	seen := make(map[string]struct{}, len(items))
+	unique := make([]Device, 0, len(items))
+	for _, item := range items {
+		key := item.ID + "|" + strings.ToLower(item.Name)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		if strings.Contains(line, "DirectShow video devices") {
-			inAudio = false
-			continue
-		}
-		if strings.Contains(line, "[dshow") && strings.Contains(line, "] \"") {
-			if idx := strings.Index(line, "] \""); idx >= 0 {
-				name := strings.Trim(line[idx+3:], "\"")
-				if name != "" {
-					if inAudio {
-						audio = append(audio, name)
-					} else {
-						video = append(video, name)
-					}
-				}
-			}
-		}
+		seen[key] = struct{}{}
+		unique = append(unique, item)
 	}
-	return
-}
-
-func FFmpegPath(configured string) string {
-	if configured != "" {
-		return configured
-	}
-	if path, err := exec.LookPath("ffmpeg"); err == nil {
-		return path
-	}
-	return "ffmpeg"
-}
-
-func PlatformFallback() string {
-	if runtime.GOOS == "windows" {
-		return "dshow"
-	}
-	return "avfoundation"
+	return unique
 }

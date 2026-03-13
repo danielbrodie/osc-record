@@ -8,94 +8,60 @@ import (
 	goosc "github.com/hypebeast/go-osc/osc"
 )
 
-// Handler is called when an OSC message arrives.
-type Handler func(addr string, args []interface{})
-
 type Message struct {
 	Address   string
 	Arguments []interface{}
 }
 
-// Server wraps go-osc for osc-record's needs.
-type Server struct {
-	port    int
-	server  *goosc.Server
-	conn    net.PacketConn
-	handler Handler
-}
-
 type Listener struct {
-	server *Server
-}
-
-func NewServer(port int, handler Handler) *Server {
-	return &Server{port: port, handler: handler}
-}
-
-func (s *Server) ListenAndServe() error {
-	dispatcher := goosc.NewStandardDispatcher()
-	if err := dispatcher.AddMsgHandler("*", func(msg *goosc.Message) {
-		if s.handler != nil {
-			s.handler(msg.Address, msg.Arguments)
-		}
-	}); err != nil {
-		return err
-	}
-
-	s.server = &goosc.Server{
-		Addr:       fmt.Sprintf(":%d", s.port),
-		Dispatcher: dispatcher,
-	}
-
-	conn, err := net.ListenPacket("udp", s.server.Addr)
-	if err != nil {
-		return bindError(s.port, err)
-	}
-	s.conn = conn
-
-	if err := s.server.Serve(conn); err != nil {
-		return bindError(s.port, err)
-	}
-	return nil
-}
-
-func (s *Server) Close() {
-	if s == nil {
-		return
-	}
-	if s.conn != nil {
-		_ = s.conn.Close()
-		return
-	}
-	if s.server != nil {
-		_ = s.server.CloseConnection()
-	}
+	conn   net.PacketConn
+	server *goosc.Server
 }
 
 func Listen(port int, handler func(Message)) (*Listener, error) {
-	srv := NewServer(port, func(addr string, args []interface{}) {
-		if handler != nil {
-			handler(Message{Address: addr, Arguments: args})
+	dispatcher := goosc.NewStandardDispatcher()
+	if err := dispatcher.AddMsgHandler("*", func(msg *goosc.Message) {
+		if handler == nil {
+			return
 		}
-	})
+		handler(Message{
+			Address:   msg.Address,
+			Arguments: msg.Arguments,
+		})
+	}); err != nil {
+		return nil, err
+	}
+
+	server := &goosc.Server{
+		Addr:       fmt.Sprintf(":%d", port),
+		Dispatcher: dispatcher,
+	}
+
+	conn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		return nil, bindError(port, err)
+	}
+
+	listener := &Listener{
+		conn:   conn,
+		server: server,
+	}
+
 	go func() {
-		_ = srv.ListenAndServe()
+		_ = server.Serve(conn)
 	}()
-	return &Listener{server: srv}, nil
+
+	return listener, nil
 }
 
 func (l *Listener) Close() error {
-	if l == nil || l.server == nil {
+	if l == nil || l.conn == nil {
 		return nil
 	}
-	l.server.Close()
-	return nil
+	return l.conn.Close()
 }
 
 func bindError(port int, err error) error {
-	if err == nil {
-		return nil
-	}
 	if strings.Contains(strings.ToLower(err.Error()), "address already in use") {
 		return fmt.Errorf("Error: Could not bind to port %d: address already in use. Use --port to specify a different port.", port)
 	}
