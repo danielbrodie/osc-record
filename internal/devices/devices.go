@@ -139,7 +139,10 @@ func parseDecklink(output string) []Device {
 	lines := strings.Split(output, "\n")
 	items := make([]Device, 0)
 	for _, line := range lines {
-		if strings.Contains(strings.ToLower(line), "blackmagic decklink devices") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "deprecated") ||
+			strings.Contains(lower, "blackmagic decklink devices") ||
+			strings.Contains(lower, "could not list") {
 			continue
 		}
 		matches := quotePattern.FindStringSubmatch(line)
@@ -147,7 +150,7 @@ func parseDecklink(output string) []Device {
 			continue
 		}
 		name := strings.TrimSpace(matches[1])
-		if name == "" || strings.Contains(strings.ToLower(line), "could not list") {
+		if name == "" {
 			continue
 		}
 		items = append(items, Device{Name: name})
