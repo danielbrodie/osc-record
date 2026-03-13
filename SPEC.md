@@ -112,10 +112,42 @@ Behavior:
 
 1. Validate that ffmpeg is available. Exit with error if not found.
 2. Validate that `osc.record_address` and `osc.stop_address` are configured. Exit with error if not.
-3. Resolve capture mode (see Capture Modes section below).
-4. Create output directory if it doesn't exist.
-5. Bind OSC listener on configured port.
-6. Print startup summary to stdout:
+3. Resolve capture mode (see Capture Modes section below). Mode is selected automatically — decklink wins if ffmpeg supports it; user is never asked to pick a mode.
+4. **Interactive device picker (if `device.name` is unset and no `--video-device` flag):**
+   - Probe available devices for the resolved capture mode.
+   - Display a numbered list. For decklink: video devices only (audio is embedded in SDI). For avfoundation/dshow: video devices first, then a second prompt for audio device.
+   - Example (decklink):
+     ```
+     No capture device configured. Available devices:
+
+       [1] UltraStudio Recorder
+       [2] DeckLink Mini Recorder 4K
+
+     Select device [1-2]:
+     ```
+   - Example (avfoundation):
+     ```
+     No capture device configured. Available video devices:
+
+       [1] Blackmagic UltraStudio Recorder
+       [2] FaceTime HD Camera
+
+     Select video device [1-2]: 1
+
+     Available audio devices:
+
+       [1] Blackmagic Audio
+       [2] MacBook Pro Microphone
+
+     Select audio device [1-2]:
+     ```
+   - Save selection to `device.name` (and `device.audio` if avfoundation/dshow) in config.toml.
+   - If no devices are found, exit with error: `Error: No capture devices found. Run 'osc-record devices' for details.`
+   - If exactly one device is found, select it automatically without prompting and print: `Auto-selected device: UltraStudio Recorder`
+5. Run 2-second signal probe (decklink mode only — see Capture Modes). Probe runs before OSC port is bound.
+6. Create output directory if it doesn't exist.
+7. Bind OSC listener on configured port.
+8. Print startup summary to stdout:
    ```
    osc-record running
      OSC port:    8000
@@ -129,9 +161,9 @@ Behavior:
    
    Waiting for record trigger...
    ```
-6. On receiving the record OSC address: spawn ffmpeg process (details below), print `Recording started: CATS-2026-03-13-193022.mp4`
-7. On receiving the stop OSC address: send SIGINT (macOS/Linux) or write `q` to ffmpeg stdin (Windows) to cleanly stop recording. Wait for ffmpeg to exit. Print `Recording saved: CATS-2026-03-13-193022.mp4`
-8. Return to step 6, waiting for next record trigger.
+9. On receiving the record OSC address: spawn ffmpeg process (details below), print `Recording started: CATS-2026-03-13-193022.mp4`
+10. On receiving the stop OSC address: send SIGINT (macOS/Linux) or write `q` to ffmpeg stdin (Windows) to cleanly stop recording. Wait for ffmpeg to exit. Print `Recording saved: CATS-2026-03-13-193022.mp4`
+11. Return to step 9, waiting for next record trigger.
 
 Edge cases:
 - If a record trigger arrives while already recording: ignore it, log a warning.
@@ -191,7 +223,7 @@ Audio is embedded in the decklink stream (SDI carries audio natively), so no sep
 
 Requirement: ffmpeg must be compiled with `--enable-decklink` and the DeckLink SDK headers. The Homebrew formula uses `homebrew-ffmpeg/ffmpeg` tap which supports this option.
 
-**Auto-detect resolution:** At startup in `run` mode, before the first recording begins, osc-record runs a 2-second probe capture to confirm the device is receiving a valid signal. This catches "camera not connected" before the show starts rather than on the first cue.
+**Auto-detect resolution:** At startup in `run` mode, osc-record runs a 2-second probe capture to confirm the device is receiving a valid signal. This runs before the OSC port is bound (so no triggers can arrive during the probe). This catches "camera not connected" before the show starts rather than on the first cue.
 
 ```
 ffmpeg -f decklink -i "UltraStudio Recorder" -t 2 -f null -
@@ -212,10 +244,10 @@ Windows equivalent of AVFoundation. Same limitations: manual format specificatio
 
 ### Auto Mode Resolution
 
-When `capture_mode = "auto"` (the default):
+When `capture_mode = "auto"` (the default), the mode is selected automatically — the user is never asked to choose:
 
 1. Test if ffmpeg supports decklink: run `ffmpeg -f decklink -list_devices true -i ""` and check exit behavior.
-2. If supported, and the configured device name appears in the decklink device list, use decklink mode.
+2. If supported, use decklink mode (regardless of whether a device is configured yet — device selection happens separately via the interactive picker).
 3. Otherwise, fall back to avfoundation (macOS) or dshow (Windows).
 4. Print the resolved mode in the startup summary so the operator knows what's happening.
 
