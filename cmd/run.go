@@ -287,8 +287,5 @@ func pickDevice(ffmpeg, resolvedMode string) error {
 }
 
 func buildFallbackMode(videoDevice, audioDevice string) capture.Mode {
-	if runtime.GOOS == "windows" {
-		return &capture.DShowMode{VideoDevice: videoDevice, AudioDevice: audioDevice}
-	}
-	return &capture.AVFoundationMode{VideoDevice: videoDevice, AudioDevice: audioDevice}
+	return capture.NewFallbackMode(videoDevice, audioDevice)
 }
