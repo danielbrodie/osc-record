@@ -211,16 +211,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 	case SignalStateMsg:
+		// Only log on state transitions, not every poll.
+		prevLocked := m.signalLocked
+		prevSig := m.signalInput + " " + m.signalRes + " " + m.signalFPS + " " + m.signalFormat
 		m.signalLocked = msg.Locked
 		m.signalFormat = msg.Format
 		m.signalInput = msg.Input
 		m.signalRes = msg.Resolution
 		m.signalFPS = msg.FPS
 		m.signalPanel.Update(msg)
-		if msg.Locked {
-			m.addLog("Signal locked: " + msg.Input + " " + msg.Resolution + " " + msg.FPS + "fps " + msg.Format)
-		} else if msg.Err != "" {
-			m.addLog("Signal: " + msg.Err)
+		curSig := msg.Input + " " + msg.Resolution + " " + msg.FPS + " " + msg.Format
+		if msg.Locked && (!prevLocked || curSig != prevSig) {
+			m.addLog("✓ Signal: " + msg.Input + " " + msg.Resolution + " " + msg.FPS + "fps " + msg.Format)
+		} else if !msg.Locked && prevLocked {
+			m.addLog("✗ Signal lost")
 		}
 
 	case AudioLevelMsg:
