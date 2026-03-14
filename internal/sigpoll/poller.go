@@ -26,6 +26,7 @@ type Poller struct {
 	mu         sync.Mutex
 	suspended  bool
 	running    bool
+	probeMu    sync.Mutex // held while a probe is in progress
 }
 
 func New(mode string) *Poller {
@@ -61,10 +62,16 @@ func (p *Poller) Stop() {
 	p.wg.Wait()
 }
 
+// Suspend pauses the poller and waits for any in-progress probe to finish.
+// Safe to call before opening the capture device in recording mode.
 func (p *Poller) Suspend() {
 	p.mu.Lock()
 	p.suspended = true
 	p.mu.Unlock()
+	// Wait for any running probe to complete before returning.
+	// This ensures the device is released before the caller opens it.
+	p.probeMu.Lock()
+	p.probeMu.Unlock() //nolint:staticcheck
 }
 
 func (p *Poller) Resume() {
@@ -124,6 +131,8 @@ func (p *Poller) isSuspended() bool {
 }
 
 func (p *Poller) probe(device, ffmpegPath, formatCode string, send func(tui.SignalStateMsg)) {
+	p.probeMu.Lock()
+	defer p.probeMu.Unlock()
 	if send == nil {
 		return
 	}
