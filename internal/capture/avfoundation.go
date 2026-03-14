@@ -13,7 +13,13 @@ func (AVFoundationMode) Summary() string {
 }
 
 func (AVFoundationMode) BuildInputArgs(videoDevice, audioDevice string) []string {
-	return []string{"-f", "avfoundation", "-framerate", "29.97", "-pixel_format", "uyvy422", "-i", fmt.Sprintf("%s:%s", videoDevice, audioDevice)}
+	// No pixel_format or framerate constraints — let the device advertise what it supports.
+	// The C920 and similar webcams don't support uyvy422 or 29.97fps.
+	input := videoDevice
+	if audioDevice != "" {
+		input = fmt.Sprintf("%s:%s", videoDevice, audioDevice)
+	}
+	return []string{"-f", "avfoundation", "-i", input}
 }
 
 func (AVFoundationMode) NeedsAudio() bool {
