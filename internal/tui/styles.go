@@ -4,18 +4,18 @@ import "github.com/charmbracelet/lipgloss"
 
 // Palette — all colors defined once here.
 const (
-	colorBg         = "#0d0d0d"
-	colorBorder     = "#2a2a2a"
-	colorTitle      = "#f5c400"
-	colorGreen      = "#00e676"
-	colorAmber      = "#ffab40"
-	colorRed        = "#ff5252"
-	colorIdle       = "#78909c"
-	colorOSCAddr    = "#80d8ff"
-	colorTimecode   = "#e040fb"
-	colorKeyHint    = "#546e7a"
-	colorDimText    = "#4a4a4a"
-	colorText       = "#e0e0e0"
+	colorBg       = "#0d0d0d"
+	colorBorder   = "#404040" // brighter than before — visible against near-black bg
+	colorTitle    = "#f5c400" // amber — panel titles
+	colorGreen    = "#00e676" // locked / recording
+	colorAmber    = "#ffab40" // warnings
+	colorRed      = "#ff5252" // errors / stop
+	colorIdle     = "#90a4ae" // idle state indicator
+	colorOSCAddr  = "#80d8ff" // OSC address text
+	colorTimecode = "#e040fb" // timecode purple
+	colorKeyHint  = "#8090a0" // key bar descriptions — was #546e7a (too dark)
+	colorDimText  = "#909090" // secondary/dim text — was #4a4a4a (nearly invisible)
+	colorText     = "#f0f0f0" // primary text — slightly brighter than before
 )
 
 var (
@@ -27,7 +27,7 @@ var (
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colorBorder)).
 		Background(lipgloss.Color(colorBg)).
-		Padding(0, 1)
+		Padding(0, 2)
 
 	// Panel title — amber, bold
 	styleTitle = lipgloss.NewStyle().
@@ -84,8 +84,8 @@ func VUBar(level float64, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	// Map -60..0 dBFS → 0..width fill
-	const floor = -60.0
+	// Map -72..0 dBFS → 0..width fill
+	const floor = -72.0
 	normalized := (level - floor) / (0 - floor)
 	if normalized < 0 {
 		normalized = 0

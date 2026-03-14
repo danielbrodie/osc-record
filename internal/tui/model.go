@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	minWidth  = 100
-	minHeight = 30
+	minWidth  = 110
+	minHeight = 32
 )
 
 // RecordingState tracks the current recording state machine.
