@@ -105,6 +105,8 @@ type Model struct {
 	recordAddr string
 	stopAddr   string
 	deviceName string
+
+	checklist ChecklistConfig
 }
 
 // Overlay is an interface for overlay panels (wizard, scanner, checklist, etc.)
@@ -137,6 +139,10 @@ func New(recordAddr, stopAddr, deviceName string) Model {
 
 func (m Model) Commands() <-chan UserCmd {
 	return m.cmdCh
+}
+
+func (m *Model) SetChecklistConfig(cfg ChecklistConfig) {
+	m.checklist = cfg
 }
 
 // Init starts background ticks.
@@ -331,7 +337,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		// TODO: help overlay
 
 	case key.Matches(msg, m.keys.Checklist):
-		// TODO: launch checklist overlay
+		m.overlay = NewChecklist(m.checklist)
+		return m.overlay.Init()
 
 	case key.Matches(msg, m.keys.Scanner):
 		// TODO: launch scanner overlay

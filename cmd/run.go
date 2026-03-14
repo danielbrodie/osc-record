@@ -239,6 +239,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	}
 
 	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, deviceInfo.VideoDisplay)
+	model.SetChecklistConfig(tui.ChecklistConfig{
+		FFmpegPath:    ffmpegPath,
+		DeviceName:    deviceInfo.VideoDisplay,
+		FormatCode:    cfg.Device.FormatCode,
+		OutputDir:     outDir,
+		CaptureMode:   mode.Name(),
+		RecordAddress: cfg.OSC.RecordAddress,
+		StopAddress:   cfg.OSC.StopAddress,
+	})
 	commandCh := model.Commands()
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	oscCh := make(chan tuiOSCMessage, 32)
