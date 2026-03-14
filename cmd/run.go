@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
 	"github.com/danielbrodie/osc-record/internal/diskmon"
 	"github.com/danielbrodie/osc-record/internal/devices"
+	"github.com/danielbrodie/osc-record/internal/health"
 	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 	"github.com/danielbrodie/osc-record/internal/platform"
 	"github.com/danielbrodie/osc-record/internal/recorder"
@@ -251,9 +253,80 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	commandCh := model.Commands()
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	oscCh := make(chan tuiOSCMessage, 32)
+	clipVerifier := verifier.Verifier{}
+
+	var (
+		statusMu     sync.Mutex
+		status       = health.StatusSnapshot{
+			State:         tui.StateIdle.String(),
+			Device:        deviceInfo.VideoDisplay,
+			Format:        cfg.Device.FormatCode,
+			OSCPort:       cfg.OSC.Port,
+			RecordAddress: cfg.OSC.RecordAddress,
+			StopAddress:   cfg.OSC.StopAddress,
+		}
+		sessionClips []health.ClipInfo
+	)
+
+	sendToUI := func(msg tea.Msg) {
+		statusMu.Lock()
+		switch msg := msg.(type) {
+		case tui.SignalStateMsg:
+			status.SignalLocked = msg.Locked
+			if msg.Format != "" {
+				status.Format = msg.Format
+			}
+		case tui.DiskStatMsg:
+			status.DiskFreeBytes = msg.FreeBytes
+		case tui.RecordingStartedMsg:
+			status.State = tui.StateRecording.String()
+			status.File = msg.File
+			status.SizeBytes = 0
+			status.DurationSec = 0
+			sessionClips = append(sessionClips, health.ClipInfo{
+				Index:     len(sessionClips) + 1,
+				File:      msg.File,
+				Device:    msg.Device,
+				StartTime: msg.Time,
+			})
+			status.ClipsThisSession = len(sessionClips)
+		case tui.FileSizeMsg:
+			status.SizeBytes = msg.SizeBytes
+			for i := range sessionClips {
+				if sessionClips[i].File == msg.File {
+					sessionClips[i].SizeBytes = msg.SizeBytes
+				}
+			}
+		case tui.RecordingStoppedMsg:
+			status.State = tui.StateIdle.String()
+			status.File = msg.File
+			status.SizeBytes = msg.SizeBytes
+			status.DurationSec = int(msg.Duration.Seconds())
+			for i := range sessionClips {
+				if sessionClips[i].File == msg.File {
+					sessionClips[i].Duration = msg.Duration
+					sessionClips[i].SizeBytes = msg.SizeBytes
+				}
+			}
+		case tui.RecordingCrashedMsg:
+			status.State = tui.StateError.String()
+			status.File = msg.File
+		case tui.ClipVerifiedMsg:
+			ok := msg.OK
+			for i := range sessionClips {
+				if sessionClips[i].File == msg.File {
+					sessionClips[i].Verified = &ok
+					sessionClips[i].VerifyErr = msg.Errors
+				}
+			}
+		}
+		statusMu.Unlock()
+
+		p.Send(msg)
+	}
 
 	listener, err := listenTUICOSC(cfg.OSC.Port, func(message tuiOSCMessage) {
-		p.Send(tui.OSCReceivedMsg{
+		sendToUI(tui.OSCReceivedMsg{
 			Address: message.Address,
 			Args:    renderArgs(message.Arguments),
 			Source:  message.Source,
@@ -271,20 +344,38 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 
 	poller := sigpoll.New(mode.Name())
 	poller.Start(deviceInfo.VideoDisplay, ffmpegPath, cfg.Device.FormatCode, func(msg tui.SignalStateMsg) {
-		p.Send(msg)
+		sendToUI(msg)
 	})
 	defer poller.Stop()
 
 	var diskMonitor diskmon.Monitor
 	diskMonitor.Start(outDir, func(msg tui.DiskStatMsg) {
-		p.Send(msg)
+		sendToUI(msg)
 	})
 	defer diskMonitor.Stop()
 
 	rec := recorder.New(ffmpegPath, platform.Current())
-	clipVerifier := verifier.Verifier{}
 	runnerCtx, cancelRunner := context.WithCancel(context.Background())
 	defer cancelRunner()
+
+	var healthServer health.Server
+	if cfg.HTTP.Port > 0 {
+		healthServer.SetClipsFunc(func() []health.ClipInfo {
+			statusMu.Lock()
+			defer statusMu.Unlock()
+			clips := make([]health.ClipInfo, len(sessionClips))
+			copy(clips, sessionClips)
+			return clips
+		})
+		if err := healthServer.Start(cfg.HTTP.Port, cfg.HTTP.Bind, func() health.StatusSnapshot {
+			statusMu.Lock()
+			defer statusMu.Unlock()
+			return status
+		}); err != nil {
+			return err
+		}
+		defer healthServer.Stop()
+	}
 
 	runnerDone := make(chan struct{})
 	go func() {
@@ -313,7 +404,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, verbose)
 			if err != nil {
 				poller.Resume()
-				p.Send(tui.ErrorBannerMsg{Text: err.Error()})
+				sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
 				return
 			}
 
@@ -322,9 +413,9 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			recordingPath = filepath.Join(outDir, filename)
 			cancelSizePoller()
 			stopSizePoller = startFileSizePoller(runnerCtx, recordingFile, recordingPath, func(msg tui.FileSizeMsg) {
-				p.Send(msg)
+				sendToUI(msg)
 			})
-			p.Send(tui.RecordingStartedMsg{
+			sendToUI(tui.RecordingStartedMsg{
 				File:   filename,
 				Device: deviceInfo.VideoDisplay,
 				Time:   recordingStarted,
@@ -340,7 +431,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			cancelSizePoller()
 			poller.Resume()
 			if err != nil {
-				p.Send(tui.ErrorBannerMsg{Text: err.Error()})
+				sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
 				return
 			}
 
@@ -350,7 +441,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			}
 
 			duration := time.Since(recordingStarted)
-			p.Send(tui.RecordingStoppedMsg{
+			sendToUI(tui.RecordingStoppedMsg{
 				File:      exit.Filename,
 				Device:    deviceInfo.VideoDisplay,
 				Duration:  duration,
@@ -358,7 +449,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			})
 			clipVerifier.Verify(exit.Path, duration, mode.Name() == capture.ModeDecklink, func(msg tui.ClipVerifiedMsg) {
 				msg.File = exit.Filename
-				p.Send(msg)
+				sendToUI(msg)
 			})
 
 			recordingFile = ""
@@ -391,7 +482,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				recordingFile = ""
 				recordingPath = ""
 				recordingStarted = time.Time{}
-				p.Send(tui.RecordingCrashedMsg{
+				sendToUI(tui.RecordingCrashedMsg{
 					File:        exit.Filename,
 					Device:      deviceInfo.VideoDisplay,
 					Err:         fmt.Errorf("ffmpeg exited unexpectedly (code %d)", exit.Code),
