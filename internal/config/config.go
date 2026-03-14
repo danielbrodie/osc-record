@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,12 +12,15 @@ import (
 )
 
 type Config struct {
-	OSC       OSCConfig       `toml:"osc"`
-	Device    DeviceConfig    `toml:"device"`
-	Recording RecordingConfig `toml:"recording"`
-	FFmpeg    FFmpegConfig    `toml:"ffmpeg"`
-	HTTP      HTTPConfig      `toml:"http"`
-	TUI       TUIConfig       `toml:"tui"`
+	OSC           OSCConfig       `toml:"osc"`
+	Device        DeviceConfig    `toml:"device"`
+	DevicesConfig []DeviceConfig  `toml:"devices"`
+	Recording     RecordingConfig `toml:"recording"`
+	FFmpeg        FFmpegConfig    `toml:"ffmpeg"`
+	HTTP          HTTPConfig      `toml:"http"`
+	TUI           TUIConfig       `toml:"tui"`
+
+	devicesFromArray bool `toml:"-"`
 }
 
 type OSCConfig struct {
@@ -109,6 +113,7 @@ func Load(path string) (*Config, error) {
 
 	if _, err := os.Stat(resolvedPath); err != nil {
 		if os.IsNotExist(err) {
+			cfg.normalizeDevices(false)
 			if err := Save(resolvedPath, &cfg); err != nil {
 				return nil, err
 			}
@@ -117,9 +122,11 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if _, err := toml.DecodeFile(resolvedPath, &cfg); err != nil {
+	meta, err := toml.DecodeFile(resolvedPath, &cfg)
+	if err != nil {
 		return nil, err
 	}
+	cfg.normalizeDevices(meta.IsDefined("devices"))
 	return &cfg, nil
 }
 
@@ -130,11 +137,73 @@ func Save(path string, cfg *Config) error {
 	}
 
 	var buffer bytes.Buffer
-	if err := toml.NewEncoder(&buffer).Encode(cfg); err != nil {
+	if err := Encode(&buffer, *cfg); err != nil {
 		return err
 	}
 
 	return os.WriteFile(resolvedPath, buffer.Bytes(), 0o644)
+}
+
+func Encode(w io.Writer, cfg Config) error {
+	return toml.NewEncoder(w).Encode(cfg.serializable())
+}
+
+func (c Config) ActiveDevices() []DeviceConfig {
+	if len(c.DevicesConfig) > 0 {
+		return append([]DeviceConfig(nil), c.DevicesConfig...)
+	}
+	return []DeviceConfig{c.Device}
+}
+
+func (c Config) HasMultipleDevices() bool {
+	return len(c.ActiveDevices()) > 1
+}
+
+func (c *Config) SetDevices(devices []DeviceConfig, fromArray bool) {
+	if len(devices) == 0 {
+		devices = []DeviceConfig{Defaults().Device}
+	}
+
+	c.DevicesConfig = append([]DeviceConfig(nil), devices...)
+	c.Device = c.DevicesConfig[0]
+	c.devicesFromArray = fromArray
+}
+
+func (c *Config) normalizeDevices(fromArray bool) {
+	if len(c.DevicesConfig) > 0 {
+		c.SetDevices(c.DevicesConfig, true)
+		return
+	}
+	c.SetDevices([]DeviceConfig{c.Device}, fromArray)
+}
+
+func (c Config) serializable() diskConfig {
+	out := diskConfig{
+		OSC:       c.OSC,
+		Recording: c.Recording,
+		FFmpeg:    c.FFmpeg,
+		HTTP:      c.HTTP,
+		TUI:       c.TUI,
+	}
+
+	active := c.ActiveDevices()
+	if len(active) > 1 || c.devicesFromArray {
+		out.DevicesConfig = append([]DeviceConfig(nil), active...)
+		return out
+	}
+
+	out.Device = active[0]
+	return out
+}
+
+type diskConfig struct {
+	OSC           OSCConfig       `toml:"osc"`
+	Device        DeviceConfig    `toml:"device"`
+	DevicesConfig []DeviceConfig  `toml:"devices"`
+	Recording     RecordingConfig `toml:"recording"`
+	FFmpeg        FFmpegConfig    `toml:"ffmpeg"`
+	HTTP          HTTPConfig      `toml:"http"`
+	TUI           TUIConfig       `toml:"tui"`
 }
 
 func ExpandPath(path string) string {

@@ -3,8 +3,9 @@ package cmd
 import (
 	"os"
 
-	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
+
+	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
 )
 
 func init() {
@@ -16,6 +17,6 @@ var configCmd = &cobra.Command{
 	Short: "Print the resolved configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := mustConfig()
-		return toml.NewEncoder(os.Stdout).Encode(cfg)
+		return cfgpkg.Encode(os.Stdout, cfg)
 	},
 }
