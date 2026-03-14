@@ -22,6 +22,7 @@ import (
 
 	"github.com/danielbrodie/osc-record/internal/capture"
 	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
+	"github.com/danielbrodie/osc-record/internal/diskmon"
 	"github.com/danielbrodie/osc-record/internal/devices"
 	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 	"github.com/danielbrodie/osc-record/internal/platform"
@@ -263,6 +264,12 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		p.Send(msg)
 	})
 	defer poller.Stop()
+
+	var diskMonitor diskmon.Monitor
+	diskMonitor.Start(outDir, func(msg tui.DiskStatMsg) {
+		p.Send(msg)
+	})
+	defer diskMonitor.Stop()
 
 	rec := recorder.New(ffmpegPath, platform.Current())
 	runnerCtx, cancelRunner := context.WithCancel(context.Background())
