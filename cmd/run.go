@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/danielbrodie/osc-record/internal/capture"
 	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
@@ -21,6 +22,10 @@ import (
 	"github.com/danielbrodie/osc-record/internal/platform"
 	"github.com/danielbrodie/osc-record/internal/recorder"
 )
+
+func isTTY() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
 
 func init() {
 	defaults := cfgpkg.Defaults()
@@ -32,6 +37,9 @@ func init() {
 	runCmd.Flags().String("capture-mode", defaults.Device.CaptureMode, "Capture mode: auto, decklink, avfoundation, or dshow")
 	runCmd.Flags().String("video-device", "", "Override video device (index or name)")
 	runCmd.Flags().String("audio-device", "", "Override audio device (index or name)")
+	runCmd.Flags().Bool("no-tui", false, "Force plaintext mode even in a TTY")
+	runCmd.Flags().Int("http-port", 0, "Enable HTTP status endpoint on this port")
+	runCmd.Flags().Int("pre-roll", 0, "Pre-roll buffer in seconds (0 = disabled)")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -52,113 +60,11 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		if cfg.OSC.RecordAddress == "" {
-			return errors.New("Error: No record trigger configured. Run 'osc-record capture record' first.")
+		noTUI, _ := cmd.Flags().GetBool("no-tui")
+		if isTTY() && cfg.TUI.Enabled && !noTUI {
+			return runTUI(cfg, ffmpegPath, cmd)
 		}
-		if cfg.OSC.StopAddress == "" {
-			return errors.New("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
-		}
-
-		mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode)
-		if err != nil {
-			return err
-		}
-		if modeWarning != "" {
-			fmt.Println(modeWarning)
-		}
-
-		deviceInfo, updatedCfg, cfgChanged, err := ensureDevicesConfigured(ffmpegPath, mode, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
-		if err != nil {
-			return err
-		}
-		cfg = updatedCfg
-		if cfgChanged {
-			if err := saveConfig(cfg); err != nil {
-				return err
-			}
-		}
-
-		if runtime.GOOS == "windows" && cfg.Recording.Profile == "prores" {
-			fmt.Println("Warning: ProRes playback on Windows requires QuickTime or VLC.")
-		}
-
-		if mode.Name() == capture.ModeDecklink {
-			if err := mode.SignalProbe(ffmpegPath, deviceInfo.VideoDisplay); err != nil {
-				fmt.Printf("Warning: No valid signal detected on %q. Recording will fail until a signal is present.\n", deviceInfo.VideoDisplay)
-			}
-		}
-
-		outDir := outputDir(cfg)
-		if err := os.MkdirAll(outDir, 0o755); err != nil {
-			return fmt.Errorf("Error: Output directory %s does not exist and could not be created: %v.", outDir, err)
-		}
-
-		triggerCh := make(chan oscpkg.Message, 16)
-		listener, err := oscpkg.Listen(cfg.OSC.Port, func(message oscpkg.Message) {
-			select {
-			case triggerCh <- message:
-			default:
-			}
-		})
-		if err != nil {
-			return err
-		}
-		defer listener.Close()
-
-		rec := recorder.New(ffmpegPath, platform.Current())
-
-		printRunSummary(cfg, mode, deviceInfo.VideoDisplay)
-		fmt.Println()
-		fmt.Println("Waiting for record trigger...")
-
-		ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stopSignals()
-
-		for {
-			select {
-			case <-ctx.Done():
-				if rec.IsRecording() {
-					exit, err := rec.StopAndWait(context.Background())
-					if err != nil {
-						return err
-					}
-					if exit.Filename != "" {
-						fmt.Printf("Recording saved: %s\n", exit.Filename)
-					}
-				}
-				return nil
-			case exit := <-rec.UnexpectedExit():
-				fmt.Printf("Error: ffmpeg exited unexpectedly (code %d). Waiting for record trigger...\n", exit.Code)
-			case message := <-triggerCh:
-				verbosef("OSC %s %v", message.Address, message.Arguments)
-
-				switch message.Address {
-				case cfg.OSC.RecordAddress:
-					if rec.IsRecording() {
-						fmt.Println("Warning: Record trigger received but already recording. Ignoring.")
-						continue
-					}
-
-					filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, verbose)
-					if err != nil {
-						return err
-					}
-					fmt.Printf("Recording started: %s\n", filename)
-				case cfg.OSC.StopAddress:
-					if !rec.IsRecording() {
-						fmt.Println("Warning: Stop trigger received but not recording. Ignoring.")
-						continue
-					}
-
-					exit, err := rec.StopAndWait(context.Background())
-					if err != nil {
-						return err
-					}
-					fmt.Printf("Recording saved: %s\n", exit.Filename)
-					fmt.Println("Waiting for record trigger...")
-				}
-			}
-		}
+		return runPlaintext(cfg, ffmpegPath, cmd)
 	},
 }
 
@@ -298,6 +204,125 @@ func promptForDevice(items []devices.Device, label string, singlePrompt bool) (d
 			continue
 		}
 		return items[index-1], nil
+	}
+}
+
+func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
+	// TUI entry point — launched when stdout is a TTY.
+	// TODO: full implementation in Phase 2+
+	// For now, fall through to plaintext with a notice.
+	fmt.Println("[TUI mode — not yet implemented, falling back to plaintext]")
+	return runPlaintext(cfg, ffmpegPath, cmd)
+}
+
+// runPlaintext is the v0.1 plaintext path, extracted so runTUI can call it as fallback.
+func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
+	if cfg.OSC.RecordAddress == "" {
+		return errors.New("Error: No record trigger configured. Run 'osc-record capture record' first.")
+	}
+	if cfg.OSC.StopAddress == "" {
+		return errors.New("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
+	}
+
+	mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode)
+	if err != nil {
+		return err
+	}
+	if modeWarning != "" {
+		fmt.Println(modeWarning)
+	}
+
+	deviceInfo, updatedCfg, cfgChanged, err := ensureDevicesConfigured(ffmpegPath, mode, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
+	if err != nil {
+		return err
+	}
+	cfg = updatedCfg
+	if cfgChanged {
+		if err := saveConfig(cfg); err != nil {
+			return err
+		}
+	}
+
+	if runtime.GOOS == "windows" && cfg.Recording.Profile == "prores" {
+		fmt.Println("Warning: ProRes playback on Windows requires QuickTime or VLC.")
+	}
+
+	if mode.Name() == capture.ModeDecklink {
+		if err := mode.SignalProbe(ffmpegPath, deviceInfo.VideoDisplay); err != nil {
+			fmt.Printf("Warning: No valid signal detected on %q. Recording will fail until a signal is present.\n", deviceInfo.VideoDisplay)
+		}
+	}
+
+	outDir := outputDir(cfg)
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("Error: Output directory %s does not exist and could not be created: %v.", outDir, err)
+	}
+
+	triggerCh := make(chan oscpkg.Message, 16)
+	listener, err := oscpkg.Listen(cfg.OSC.Port, func(message oscpkg.Message) {
+		select {
+		case triggerCh <- message:
+		default:
+		}
+	})
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	rec := recorder.New(ffmpegPath, platform.Current())
+
+	printRunSummary(cfg, mode, deviceInfo.VideoDisplay)
+	fmt.Println()
+	fmt.Println("Waiting for record trigger...")
+
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if rec.IsRecording() {
+				exit, err := rec.StopAndWait(context.Background())
+				if err != nil {
+					return err
+				}
+				if exit.Filename != "" {
+					fmt.Printf("Recording saved: %s\n", exit.Filename)
+				}
+			}
+			return nil
+		case exit := <-rec.UnexpectedExit():
+			fmt.Printf("Error: ffmpeg exited unexpectedly (code %d). Waiting for record trigger...\n", exit.Code)
+		case message := <-triggerCh:
+			verbosef("OSC %s %v", message.Address, message.Arguments)
+
+			switch message.Address {
+			case cfg.OSC.RecordAddress:
+				if rec.IsRecording() {
+					fmt.Println("Warning: Record trigger received but already recording. Ignoring.")
+					continue
+				}
+
+				filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, verbose)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Recording started: %s\n", filename)
+			case cfg.OSC.StopAddress:
+				if !rec.IsRecording() {
+					fmt.Println("Warning: Stop trigger received but not recording. Ignoring.")
+					continue
+				}
+
+				exit, err := rec.StopAndWait(context.Background())
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Recording saved: %s\n", exit.Filename)
+				fmt.Println("Waiting for record trigger...")
+			}
+		}
 	}
 }
 

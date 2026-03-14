@@ -15,6 +15,8 @@ type Config struct {
 	Device    DeviceConfig    `toml:"device"`
 	Recording RecordingConfig `toml:"recording"`
 	FFmpeg    FFmpegConfig    `toml:"ffmpeg"`
+	HTTP      HTTPConfig      `toml:"http"`
+	TUI       TUIConfig       `toml:"tui"`
 }
 
 type OSCConfig struct {
@@ -34,10 +36,24 @@ type RecordingConfig struct {
 	Profile   string `toml:"profile"`
 	Prefix    string `toml:"prefix"`
 	OutputDir string `toml:"output_dir"`
+	Show      string `toml:"show"`
+	Scene     string `toml:"scene"`
+	Take      string `toml:"take"`
+	PreRoll   int    `toml:"pre_roll"`
 }
 
 type FFmpegConfig struct {
 	Path string `toml:"path"`
+}
+
+type HTTPConfig struct {
+	Port int    `toml:"port"`
+	Bind string `toml:"bind"`
+}
+
+type TUIConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Theme   string `toml:"theme"`
 }
 
 func Defaults() Config {
@@ -56,9 +72,18 @@ func Defaults() Config {
 			Profile:   "h264",
 			Prefix:    "recording",
 			OutputDir: "~/Dropbox/osc-record/",
+			PreRoll:   0,
 		},
 		FFmpeg: FFmpegConfig{
 			Path: "",
+		},
+		HTTP: HTTPConfig{
+			Port: 0,
+			Bind: "0.0.0.0",
+		},
+		TUI: TUIConfig{
+			Enabled: true,
+			Theme:   "dark",
 		},
 	}
 }
