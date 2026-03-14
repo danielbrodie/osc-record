@@ -306,6 +306,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ErrorBannerMsg:
 		m.banner = msg.Text
 
+	case WizardDoneMsg:
+		m.overlay = nil
+		m.recordAddr = msg.Result.RecordAddress
+		m.stopAddr = msg.Result.StopAddress
+		m.deviceName = msg.Result.DeviceName
+		m.oscPanel.recordAddr = msg.Result.RecordAddress
+		m.oscPanel.stopAddr = msg.Result.StopAddress
+		m.addLog("Setup saved: device=" + msg.Result.DeviceName +
+			" record=" + msg.Result.RecordAddress +
+			" stop=" + msg.Result.StopAddress)
+		// Signal the runner to reload config (via UserCmd channel)
+		m.emitCommand(UserCmdConfigChanged)
+
+	case WizardCancelledMsg:
+		m.overlay = nil
+
 	case ClearBannerMsg:
 		m.banner = ""
 
@@ -362,7 +378,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.overlay.Init()
 
 	case key.Matches(msg, m.keys.Wizard):
-		// TODO: launch wizard overlay
+		w := NewWizard(m.width, m.height, m.statusPanel.DiskPath, "recording")
+		m.overlay = w
+		return w.Init()
 	}
 	return nil
 }
