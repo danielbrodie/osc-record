@@ -31,6 +31,10 @@ func (v Verifier) Verify(file string, expectedDuration time.Duration, needsAudio
 
 		ffprobePath, err := exec.LookPath("ffprobe")
 		if err != nil {
+			// Fall back to ffprobe-decklink (installed by the ffmpeg-decklink formula)
+			ffprobePath, err = exec.LookPath("ffprobe-decklink")
+		}
+		if err != nil {
 			msg.OK = false
 			msg.Errors = []string{"ffprobe not found on PATH"}
 			sendResult(send, msg)

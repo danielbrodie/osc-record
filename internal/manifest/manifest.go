@@ -100,6 +100,9 @@ func ManifestFilename(show string, now time.Time) string {
 func buildEntry(path string, clip tui.ClipInfo) (Entry, error) {
 	ffprobePath, err := exec.LookPath("ffprobe")
 	if err != nil {
+		ffprobePath, err = exec.LookPath("ffprobe-decklink")
+	}
+	if err != nil {
 		return Entry{}, err
 	}
 
