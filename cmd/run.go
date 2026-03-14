@@ -456,23 +456,9 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		sessionClips []health.ClipInfo
 	)
 
-	// pendingMsgs buffers messages sent before p.Run() starts.
-	// Once the program is running, all sends go directly to p.Send().
-	var (
-		uiReadyMu   sync.Mutex
-		uiReady     bool
-		pendingMsgs []tea.Msg
-	)
-	markUIReady := func() {
-		uiReadyMu.Lock()
-		pending := pendingMsgs
-		pendingMsgs = nil
-		uiReady = true
-		uiReadyMu.Unlock()
-		for _, m := range pending {
-			p.Send(m)
-		}
-	}
+	// uiStarted is closed once p.Run() has been called, allowing goroutines
+	// that want to p.Send() to wait until the event loop is ready.
+	uiStarted := make(chan struct{})
 
 	sendToUI := func(msg tea.Msg) {
 		statusMu.Lock()
@@ -528,15 +514,11 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		}
 		statusMu.Unlock()
 
-		uiReadyMu.Lock()
-		ready := uiReady
-		if !ready {
-			pendingMsgs = append(pendingMsgs, msg)
-		}
-		uiReadyMu.Unlock()
-		if ready {
+		// Send in a goroutine so callers never block waiting for the event loop.
+		go func() {
+			<-uiStarted
 			p.Send(msg)
-		}
+		}()
 	}
 
 	logWarning := func(text string) {
@@ -948,7 +930,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		}
 	}()
 
-	markUIReady()
+	go func() { close(uiStarted) }()
 	_, err = p.Run()
 	cancelRunner()
 	<-runnerDone
