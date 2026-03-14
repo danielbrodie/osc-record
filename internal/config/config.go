@@ -159,6 +159,10 @@ func (c Config) HasMultipleDevices() bool {
 	return len(c.ActiveDevices()) > 1
 }
 
+func (c Config) UsesDevicesArray() bool {
+	return c.devicesFromArray
+}
+
 func (c *Config) SetDevices(devices []DeviceConfig, fromArray bool) {
 	if len(devices) == 0 {
 		devices = []DeviceConfig{Defaults().Device}
@@ -192,13 +196,14 @@ func (c Config) serializable() diskConfig {
 		return out
 	}
 
-	out.Device = active[0]
+	device := active[0]
+	out.Device = &device
 	return out
 }
 
 type diskConfig struct {
 	OSC           OSCConfig       `toml:"osc"`
-	Device        DeviceConfig    `toml:"device"`
+	Device        *DeviceConfig   `toml:"device"`
 	DevicesConfig []DeviceConfig  `toml:"devices"`
 	Recording     RecordingConfig `toml:"recording"`
 	FFmpeg        FFmpegConfig    `toml:"ffmpeg"`

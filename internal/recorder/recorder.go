@@ -63,6 +63,10 @@ func (r *Recorder) IsRecording() bool {
 }
 
 func (r *Recorder) Start(mode capture.CaptureMode, profile, videoDevice, audioDevice, prefix, outDir string, slate Slate, verbose bool) (string, error) {
+	return r.StartAt(time.Now(), mode, profile, videoDevice, audioDevice, prefix, outDir, slate, "", verbose)
+}
+
+func (r *Recorder) StartAt(startedAt time.Time, mode capture.CaptureMode, profile, videoDevice, audioDevice, prefix, outDir string, slate Slate, fileLabel string, verbose bool) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -70,7 +74,7 @@ func (r *Recorder) Start(mode capture.CaptureMode, profile, videoDevice, audioDe
 		return "", fmt.Errorf("recording already active")
 	}
 
-	filename := buildFilename(prefix, profile, slate)
+	filename := buildFilenameAt(prefix, profile, slate, fileLabel, startedAt)
 	fullPath := filepath.Join(outDir, filename)
 
 	args, err := buildArgs(mode, profile, videoDevice, audioDevice, fullPath, slate)
@@ -163,14 +167,21 @@ func buildArgs(mode capture.CaptureMode, profile, videoDevice, audioDevice, outp
 	return args, nil
 }
 
-func buildFilename(prefix, profile string, slate Slate) string {
+func buildFilenameAt(prefix, profile string, slate Slate, fileLabel string, startedAt time.Time) string {
+	label := sanitizePrefix(fileLabel)
+	labelPart := ""
+	if label != "" {
+		labelPart = "-" + label
+	}
+
 	if slate.Show != "" && slate.Scene != "" && slate.Take != "" {
 		return fmt.Sprintf(
-			"%s-%s-%s-%s%s",
+			"%s-%s-%s%s-%s%s",
 			sanitizePrefix(slate.Show),
 			sanitizePrefix(slate.Scene),
 			sanitizePrefix(slate.Take),
-			time.Now().Format("2006-01-02-150405"),
+			labelPart,
+			startedAt.Format("2006-01-02-150405"),
 			extensionForProfile(profile),
 		)
 	}
@@ -179,7 +190,7 @@ func buildFilename(prefix, profile string, slate Slate) string {
 	if safePrefix == "" {
 		safePrefix = "recording"
 	}
-	return fmt.Sprintf("%s-%s%s", safePrefix, time.Now().Format("2006-01-02-150405"), extensionForProfile(profile))
+	return fmt.Sprintf("%s%s-%s%s", safePrefix, labelPart, startedAt.Format("2006-01-02-150405"), extensionForProfile(profile))
 }
 
 func extensionForProfile(profile string) string {

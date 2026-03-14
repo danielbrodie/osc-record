@@ -30,7 +30,11 @@ func (p ClipsPanel) View(width, height int) string {
 	lines := make([]string, 0, len(p.clips))
 
 	for _, c := range p.clips {
-		name := shortName(c.File, width-24)
+		taggedName := c.File
+		if c.Device != "" {
+			taggedName = "[" + c.Device + "] " + c.File
+		}
+		name := shortName(taggedName, width-24)
 		dur := fmtDuration(c.Duration)
 		size := fmtBytes(c.SizeBytes)
 		status := p.verifyStatus(c)

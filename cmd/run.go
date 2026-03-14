@@ -24,10 +24,11 @@ import (
 
 	"github.com/danielbrodie/osc-record/internal/capture"
 	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
-	"github.com/danielbrodie/osc-record/internal/diskmon"
 	"github.com/danielbrodie/osc-record/internal/devices"
+	"github.com/danielbrodie/osc-record/internal/diskmon"
 	"github.com/danielbrodie/osc-record/internal/health"
 	"github.com/danielbrodie/osc-record/internal/manifest"
+	"github.com/danielbrodie/osc-record/internal/multirecorder"
 	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 	"github.com/danielbrodie/osc-record/internal/platform"
 	"github.com/danielbrodie/osc-record/internal/preview"
@@ -90,7 +91,25 @@ type selectedDevices struct {
 	AudioConfigValue string
 }
 
+type resolvedDevice struct {
+	Config   cfgpkg.DeviceConfig
+	Mode     capture.CaptureMode
+	Selected selectedDevices
+}
+
 func applyRunFlagOverrides(cmd *cobra.Command, cfg cfgpkg.Config) (cfgpkg.Config, error) {
+	if cfg.HasMultipleDevices() {
+		if cmd.Flags().Changed("capture-mode") || cmd.Flags().Changed("video-device") || cmd.Flags().Changed("audio-device") {
+			return cfg, errors.New("Error: --capture-mode, --video-device, and --audio-device are only supported with a single configured device. Edit [[devices]] in config instead.")
+		}
+	}
+
+	devices := cfg.ActiveDevices()
+	if len(devices) == 0 {
+		devices = []cfgpkg.DeviceConfig{cfg.Device}
+	}
+	primary := devices[0]
+
 	if cmd.Flags().Changed("prefix") {
 		value, _ := cmd.Flags().GetString("prefix")
 		cfg.Recording.Prefix = value
@@ -112,67 +131,157 @@ func applyRunFlagOverrides(cmd *cobra.Command, cfg cfgpkg.Config) (cfgpkg.Config
 	}
 	if cmd.Flags().Changed("capture-mode") {
 		value, _ := cmd.Flags().GetString("capture-mode")
-		cfg.Device.CaptureMode = value
+		primary.CaptureMode = value
 	}
 	if cmd.Flags().Changed("video-device") {
 		value, _ := cmd.Flags().GetString("video-device")
-		cfg.Device.Name = value
+		primary.Name = value
 	}
 	if cmd.Flags().Changed("audio-device") {
 		value, _ := cmd.Flags().GetString("audio-device")
-		cfg.Device.Audio = value
+		primary.Audio = value
 	}
+	devices[0] = primary
+	cfg.SetDevices(devices, cfg.UsesDevicesArray() || len(devices) > 1)
 	return cfg, nil
 }
 
-func ensureDevicesConfigured(ffmpegPath string, mode capture.CaptureMode, cfg cfgpkg.Config, videoOverride, audioOverride bool) (selectedDevices, cfgpkg.Config, bool, error) {
+func ensureDeviceConfigured(ffmpegPath string, mode capture.CaptureMode, deviceCfg cfgpkg.DeviceConfig, videoOverride, audioOverride bool) (selectedDevices, cfgpkg.DeviceConfig, bool, error) {
 	var changed bool
 
 	group, err := devices.ProbeMode(ffmpegPath, mode.Name())
 	if err != nil {
-		return selectedDevices{}, cfg, false, err
+		return selectedDevices{}, deviceCfg, false, err
 	}
 
 	selected := selectedDevices{}
-	if cfg.Device.Name == "" && !videoOverride {
+	if deviceCfg.Name == "" && !videoOverride {
 		video, err := promptForDevice(group.Video, "capture device", mode.Name() == capture.ModeDecklink)
 		if err != nil {
-			return selectedDevices{}, cfg, false, err
+			return selectedDevices{}, deviceCfg, false, err
 		}
-		cfg.Device.Name = video.ConfigValue()
+		deviceCfg.Name = video.ConfigValue()
 		selected.VideoDisplay = video.Name
 		selected.VideoConfigValue = video.ConfigValue()
 		changed = true
 	} else {
-		video, err := devices.MatchDevice(group.Video, cfg.Device.Name)
+		video, err := devices.MatchDevice(group.Video, deviceCfg.Name)
 		if err != nil {
-			return selectedDevices{}, cfg, false, fmt.Errorf("Error: Video device %q not found. Run 'osc-record devices' to list available devices.", cfg.Device.Name)
+			return selectedDevices{}, deviceCfg, false, fmt.Errorf("Error: Video device %q not found. Run 'osc-record devices' to list available devices.", deviceCfg.Name)
 		}
 		selected.VideoDisplay = video.Name
-		selected.VideoConfigValue = cfg.Device.Name
+		selected.VideoConfigValue = deviceCfg.Name
 	}
 
 	if mode.NeedsAudio() {
-		if cfg.Device.Audio == "" && !audioOverride {
+		if deviceCfg.Audio == "" && !audioOverride {
 			audio, err := promptForDevice(group.Audio, "audio device", false)
 			if err != nil {
-				return selectedDevices{}, cfg, false, err
+				return selectedDevices{}, deviceCfg, false, err
 			}
-			cfg.Device.Audio = audio.ConfigValue()
+			deviceCfg.Audio = audio.ConfigValue()
 			selected.AudioDisplay = audio.Name
 			selected.AudioConfigValue = audio.ConfigValue()
 			changed = true
 		} else {
-			audio, err := devices.MatchDevice(group.Audio, cfg.Device.Audio)
+			audio, err := devices.MatchDevice(group.Audio, deviceCfg.Audio)
 			if err != nil {
-				return selectedDevices{}, cfg, false, fmt.Errorf("Error: Audio device %q not found. Run 'osc-record devices' to list available devices.", cfg.Device.Audio)
+				return selectedDevices{}, deviceCfg, false, fmt.Errorf("Error: Audio device %q not found. Run 'osc-record devices' to list available devices.", deviceCfg.Audio)
 			}
 			selected.AudioDisplay = audio.Name
-			selected.AudioConfigValue = cfg.Device.Audio
+			selected.AudioConfigValue = deviceCfg.Audio
 		}
 	}
 
-	return selected, cfg, changed, nil
+	return selected, deviceCfg, changed, nil
+}
+
+func resolveConfiguredDevices(ffmpegPath string, cfg cfgpkg.Config, videoOverride, audioOverride bool) ([]resolvedDevice, cfgpkg.Config, []string, bool, error) {
+	configured := cfg.ActiveDevices()
+	if len(configured) == 0 {
+		configured = []cfgpkg.DeviceConfig{cfg.Device}
+	}
+
+	resolved := make([]resolvedDevice, 0, len(configured))
+	warnings := make([]string, 0, len(configured))
+	changed := false
+
+	for i, deviceCfg := range configured {
+		mode, warning, err := capture.ResolveMode(deviceCfg.CaptureMode, ffmpegPath, runtime.GOOS, deviceCfg.FormatCode, deviceCfg.VideoInput)
+		if err != nil {
+			return nil, cfg, nil, false, err
+		}
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+
+		selected, updatedCfg, cfgChanged, err := ensureDeviceConfigured(ffmpegPath, mode, deviceCfg, videoOverride && i == 0, audioOverride && i == 0)
+		if err != nil {
+			return nil, cfg, nil, false, err
+		}
+
+		configured[i] = updatedCfg
+		changed = changed || cfgChanged
+		resolved = append(resolved, resolvedDevice{
+			Config:   updatedCfg,
+			Mode:     mode,
+			Selected: selected,
+		})
+	}
+
+	cfg.SetDevices(configured, cfg.UsesDevicesArray() || len(configured) > 1)
+	return resolved, cfg, warnings, changed, nil
+}
+
+func configuredDeviceNames(devices []resolvedDevice) []string {
+	names := make([]string, 0, len(devices))
+	for _, device := range devices {
+		names = append(names, device.Selected.VideoDisplay)
+	}
+	return names
+}
+
+func primaryDevice(devices []resolvedDevice) resolvedDevice {
+	return devices[0]
+}
+
+func startupProbeWarnings(ffmpegPath string, devices []resolvedDevice) []string {
+	warnings := make([]string, 0, len(devices))
+	for _, device := range devices {
+		if device.Mode.Name() != capture.ModeDecklink {
+			continue
+		}
+		if err := device.Mode.SignalProbe(ffmpegPath, device.Selected.VideoDisplay); err != nil {
+			warnings = append(warnings, fmt.Sprintf("Warning: No valid signal detected on %q. Recording will fail until a signal is present.", device.Selected.VideoDisplay))
+		}
+	}
+	return warnings
+}
+
+func toMultiRecorderDevices(devices []resolvedDevice) []multirecorder.DeviceInfo {
+	result := make([]multirecorder.DeviceInfo, 0, len(devices))
+	for _, device := range devices {
+		result = append(result, multirecorder.DeviceInfo{
+			Name:        device.Selected.VideoDisplay,
+			Mode:        device.Mode,
+			VideoDevice: device.Selected.VideoConfigValue,
+			AudioDevice: device.Selected.AudioConfigValue,
+		})
+	}
+	return result
+}
+
+func toStatusDevices(devices []resolvedDevice) []tui.DeviceStatus {
+	result := make([]tui.DeviceStatus, 0, len(devices))
+	for _, device := range devices {
+		result = append(result, tui.DeviceStatus{
+			Device:      device.Selected.VideoDisplay,
+			CaptureMode: device.Mode.Name(),
+			FormatCode:  device.Config.FormatCode,
+			State:       tui.StateIdle,
+		})
+	}
+	return result
 }
 
 func promptForDevice(items []devices.Device, label string, singlePrompt bool) (devices.Device, error) {
@@ -223,12 +332,7 @@ func promptForDevice(items []devices.Device, label string, singlePrompt bool) (d
 }
 
 func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
-	mode, _, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode, cfg.Device.VideoInput)
-	if err != nil {
-		return err
-	}
-
-	deviceInfo, updatedCfg, cfgChanged, err := ensureDevicesConfigured(ffmpegPath, mode, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
+	resolvedDevices, updatedCfg, modeWarnings, cfgChanged, err := resolveConfiguredDevices(ffmpegPath, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
 	if err != nil {
 		return err
 	}
@@ -244,13 +348,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		return fmt.Errorf("Error: Output directory %s does not exist and could not be created: %v.", outDir, err)
 	}
 
-	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, deviceInfo.VideoDisplay)
+	primary := primaryDevice(resolvedDevices)
+	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, configuredDeviceNames(resolvedDevices))
+	model.SetStatusDevices(toStatusDevices(resolvedDevices))
 	model.SetChecklistConfig(tui.ChecklistConfig{
 		FFmpegPath:    ffmpegPath,
-		DeviceName:    deviceInfo.VideoDisplay,
-		FormatCode:    cfg.Device.FormatCode,
+		DeviceName:    primary.Selected.VideoDisplay,
+		FormatCode:    primary.Config.FormatCode,
 		OutputDir:     outDir,
-		CaptureMode:   mode.Name(),
+		CaptureMode:   primary.Mode.Name(),
 		RecordAddress: cfg.OSC.RecordAddress,
 		StopAddress:   cfg.OSC.StopAddress,
 	})
@@ -266,11 +372,11 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	clipVerifier := verifier.Verifier{}
 
 	var (
-		statusMu     sync.Mutex
-		status       = health.StatusSnapshot{
+		statusMu sync.Mutex
+		status   = health.StatusSnapshot{
 			State:         tui.StateIdle.String(),
-			Device:        deviceInfo.VideoDisplay,
-			Format:        cfg.Device.FormatCode,
+			Device:        primary.Selected.VideoDisplay,
+			Format:        primary.Config.FormatCode,
 			OSCPort:       cfg.OSC.Port,
 			RecordAddress: cfg.OSC.RecordAddress,
 			StopAddress:   cfg.OSC.StopAddress,
@@ -335,6 +441,18 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		p.Send(msg)
 	}
 
+	logWarning := func(text string) {
+		sendToUI(tui.LogMsg{Time: time.Now(), Text: text})
+		sendToUI(tui.ErrorBannerMsg{Text: text})
+	}
+
+	for _, warning := range modeWarnings {
+		logWarning(warning)
+	}
+	for _, warning := range startupProbeWarnings(ffmpegPath, resolvedDevices) {
+		logWarning(warning)
+	}
+
 	listener, err := listenTUICOSC(cfg.OSC.Port, func(message tuiOSCMessage) {
 		sendToUI(tui.OSCReceivedMsg{
 			Address: message.Address,
@@ -352,8 +470,8 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	}
 	defer listener.Close()
 
-	poller := sigpoll.New(mode.Name())
-	poller.Start(deviceInfo.VideoDisplay, ffmpegPath, cfg.Device.FormatCode, cfg.Device.VideoInput, func(msg tui.SignalStateMsg) {
+	poller := sigpoll.New(primary.Mode.Name())
+	poller.Start(primary.Selected.VideoDisplay, ffmpegPath, primary.Config.FormatCode, primary.Config.VideoInput, func(msg tui.SignalStateMsg) {
 		sendToUI(msg)
 	})
 	defer poller.Stop()
@@ -364,7 +482,8 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	})
 	defer diskMonitor.Stop()
 
-	rec := recorder.New(ffmpegPath, platform.Current())
+	singleRecorder := recorder.New(ffmpegPath, platform.Current())
+	multiRecorder := multirecorder.New(ffmpegPath, platform.Current())
 	runnerCtx, cancelRunner := context.WithCancel(context.Background())
 	defer cancelRunner()
 
@@ -392,17 +511,24 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		defer close(runnerDone)
 
 		var (
-			recordingFile    string
-			recordingPath    string
-			recordingStarted time.Time
-			stopSizePoller   context.CancelFunc
-			completedClips   []string
-			currentSlate     = recorder.Slate{
+			recordingFile       string
+			recordingPath       string
+			recordingStarted    time.Time
+			stopSizePoller      context.CancelFunc
+			activeRecordingByID = map[string]bool{}
+			recordingPaths      = map[string]string{}
+			sizePollers         = map[string]context.CancelFunc{}
+			completedClips      []string
+			currentViewPath     string
+			currentSlate        = recorder.Slate{
 				Show:  cfg.Recording.Show,
 				Scene: cfg.Recording.Scene,
 				Take:  cfg.Recording.Take,
 			}
 		)
+
+		useMultiRecorder := len(resolvedDevices) > 1
+		multiDevices := toMultiRecorderDevices(resolvedDevices)
 
 		cancelSizePoller := func() {
 			if stopSizePoller != nil {
@@ -411,13 +537,66 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			}
 		}
 
+		cancelMultiSizePoller := func(deviceName string) {
+			if cancel, ok := sizePollers[deviceName]; ok {
+				cancel()
+				delete(sizePollers, deviceName)
+			}
+		}
+
+		cancelAllMultiSizePollers := func() {
+			for deviceName := range sizePollers {
+				cancelMultiSizePoller(deviceName)
+			}
+		}
+
+		refreshCurrentViewPath := func() {
+			currentViewPath = ""
+			for _, device := range resolvedDevices {
+				if path := recordingPaths[device.Selected.VideoDisplay]; path != "" {
+					currentViewPath = path
+					return
+				}
+			}
+		}
+
 		startRecording := func() {
-			if rec.IsRecording() {
+			if useMultiRecorder {
+				if multiRecorder.IsRecording() {
+					return
+				}
+
+				poller.Suspend()
+				results, err := multiRecorder.Start(multiDevices, cfg.Recording.Profile, cfg.Recording.Prefix, outDir, currentSlate, verbose)
+				if err != nil {
+					poller.Resume()
+					sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
+					return
+				}
+
+				cancelAllMultiSizePollers()
+				for _, result := range results {
+					activeRecordingByID[result.Device.Name] = true
+					recordingPaths[result.Device.Name] = result.Path
+					sizePollers[result.Device.Name] = startFileSizePoller(runnerCtx, result.Filename, result.Path, func(msg tui.FileSizeMsg) {
+						sendToUI(msg)
+					})
+					currentViewPath = result.Path
+					sendToUI(tui.RecordingStartedMsg{
+						File:   result.Filename,
+						Device: result.Device.Name,
+						Time:   result.StartedAt,
+					})
+				}
+				return
+			}
+
+			if singleRecorder.IsRecording() {
 				return
 			}
 
 			poller.Suspend()
-			filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, currentSlate, verbose)
+			filename, err := singleRecorder.Start(primary.Mode, cfg.Recording.Profile, primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue, cfg.Recording.Prefix, outDir, currentSlate, verbose)
 			if err != nil {
 				poller.Resume()
 				sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
@@ -427,23 +606,55 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			recordingStarted = time.Now()
 			recordingFile = filename
 			recordingPath = filepath.Join(outDir, filename)
+			currentViewPath = recordingPath
 			cancelSizePoller()
 			stopSizePoller = startFileSizePoller(runnerCtx, recordingFile, recordingPath, func(msg tui.FileSizeMsg) {
 				sendToUI(msg)
 			})
 			sendToUI(tui.RecordingStartedMsg{
 				File:   filename,
-				Device: deviceInfo.VideoDisplay,
+				Device: primary.Selected.VideoDisplay,
 				Time:   recordingStarted,
 			})
 		}
 
 		stopRecording := func() {
-			if !rec.IsRecording() {
+			if useMultiRecorder {
+				if !multiRecorder.IsRecording() {
+					return
+				}
+
+				results, err := multiRecorder.Stop()
+				cancelAllMultiSizePollers()
+				poller.Resume()
+				for _, result := range results {
+					delete(activeRecordingByID, result.Device.Name)
+					delete(recordingPaths, result.Device.Name)
+					sizeBytes := fileSize(result.Exit.Path)
+					sendToUI(tui.RecordingStoppedMsg{
+						File:      result.Exit.Filename,
+						Device:    result.Device.Name,
+						Duration:  result.Duration,
+						SizeBytes: sizeBytes,
+					})
+					clipVerifier.Verify(result.Exit.Path, result.Duration, result.Device.Mode.Name() == capture.ModeDecklink, func(msg tui.ClipVerifiedMsg) {
+						msg.File = result.Exit.Filename
+						sendToUI(msg)
+					})
+					completedClips = append(completedClips, result.Exit.Filename)
+				}
+				refreshCurrentViewPath()
+				if err != nil {
+					sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
+				}
 				return
 			}
 
-			exit, err := rec.StopAndWait(context.Background())
+			if !singleRecorder.IsRecording() {
+				return
+			}
+
+			exit, err := singleRecorder.StopAndWait(context.Background())
 			cancelSizePoller()
 			poller.Resume()
 			if err != nil {
@@ -459,11 +670,11 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			duration := time.Since(recordingStarted)
 			sendToUI(tui.RecordingStoppedMsg{
 				File:      exit.Filename,
-				Device:    deviceInfo.VideoDisplay,
+				Device:    primary.Selected.VideoDisplay,
 				Duration:  duration,
 				SizeBytes: sizeBytes,
 			})
-			clipVerifier.Verify(exit.Path, duration, mode.Name() == capture.ModeDecklink, func(msg tui.ClipVerifiedMsg) {
+			clipVerifier.Verify(exit.Path, duration, primary.Mode.Name() == capture.ModeDecklink, func(msg tui.ClipVerifiedMsg) {
 				msg.File = exit.Filename
 				sendToUI(msg)
 			})
@@ -472,12 +683,14 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			recordingFile = ""
 			recordingPath = ""
 			recordingStarted = time.Time{}
+			currentViewPath = ""
 		}
 
 		for {
 			select {
 			case <-runnerCtx.Done():
 				cancelSizePoller()
+				cancelAllMultiSizePollers()
 				return
 			case message := <-oscCh:
 				switch {
@@ -495,15 +708,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				case tui.UserCmdGrabPreview:
 					go func() {
 						poller.Suspend()
-						inputArgs := mode.BuildInputArgs(deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue)
-						path, err := preview.GrabFrame(ffmpegPath, inputArgs, deviceInfo.VideoDisplay)
+						inputArgs := primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
+						path, err := preview.GrabFrame(ffmpegPath, inputArgs, primary.Selected.VideoDisplay)
 						poller.Resume()
 						sendToUI(tui.PreviewGrabbedMsg{Path: path, Err: err})
 					}()
 				case tui.UserCmdViewClip:
 					go func() {
-						if recordingPath != "" {
-							_ = openPath(recordingPath)
+						if currentViewPath != "" {
+							_ = openPath(currentViewPath)
 						} else if len(completedClips) > 0 {
 							_ = openPath(filepath.Join(outDir, completedClips[len(completedClips)-1]))
 						}
@@ -516,7 +729,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 						poller.Suspend()
 						scanCtx, cancelScan := context.WithCancel(runnerCtx)
 						_ = cancelScan
-						results := scanner.Run(scanCtx, ffmpegPath, deviceInfo.VideoDisplay, cfg.Device.VideoInput, func(msg tui.ScanProgressMsg) {
+						results := scanner.Run(scanCtx, ffmpegPath, primary.Selected.VideoDisplay, primary.Config.VideoInput, func(msg tui.ScanProgressMsg) {
 							sendToUI(msg)
 						})
 						poller.Resume()
@@ -532,16 +745,37 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				cfg.Recording.Show = slate.Show
 				cfg.Recording.Scene = slate.Scene
 				cfg.Recording.Take = slate.Take
-			case exit := <-rec.UnexpectedExit():
+			case exit := <-singleRecorder.UnexpectedExit():
+				if useMultiRecorder {
+					continue
+				}
 				cancelSizePoller()
 				poller.Resume()
 				recordingFile = ""
 				recordingPath = ""
 				recordingStarted = time.Time{}
+				currentViewPath = ""
 				sendToUI(tui.RecordingCrashedMsg{
 					File:        exit.Filename,
-					Device:      deviceInfo.VideoDisplay,
+					Device:      primary.Selected.VideoDisplay,
 					Err:         fmt.Errorf("ffmpeg exited unexpectedly (code %d)", exit.Code),
+					Recoverable: false,
+				})
+			case exit := <-multiRecorder.UnexpectedExit():
+				if !useMultiRecorder {
+					continue
+				}
+				cancelMultiSizePoller(exit.Device.Name)
+				delete(activeRecordingByID, exit.Device.Name)
+				delete(recordingPaths, exit.Device.Name)
+				if exit.Device.Name == primary.Selected.VideoDisplay {
+					poller.Resume()
+				}
+				refreshCurrentViewPath()
+				sendToUI(tui.RecordingCrashedMsg{
+					File:        exit.Exit.Filename,
+					Device:      exit.Device.Name,
+					Err:         fmt.Errorf("ffmpeg exited unexpectedly (code %d)", exit.Exit.Code),
 					Recoverable: false,
 				})
 			}
@@ -551,8 +785,14 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	_, err = p.Run()
 	cancelRunner()
 	<-runnerDone
-	if rec.IsRecording() {
-		_, _ = rec.StopAndWait(context.Background())
+	if len(resolvedDevices) > 1 {
+		if multiRecorder.IsRecording() {
+			_, _ = multiRecorder.Stop()
+		}
+	} else {
+		if singleRecorder.IsRecording() {
+			_, _ = singleRecorder.StopAndWait(context.Background())
+		}
 	}
 	statusMu.Lock()
 	clipsForManifest := make([]tui.ClipInfo, len(sessionClips))
@@ -682,19 +922,14 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 		return errors.New("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
 	}
 
-	mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode, cfg.Device.VideoInput)
-	if err != nil {
-		return err
-	}
-	if modeWarning != "" {
-		fmt.Println(modeWarning)
-	}
-
-	deviceInfo, updatedCfg, cfgChanged, err := ensureDevicesConfigured(ffmpegPath, mode, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
+	resolvedDevices, updatedCfg, modeWarnings, cfgChanged, err := resolveConfiguredDevices(ffmpegPath, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
 	if err != nil {
 		return err
 	}
 	cfg = updatedCfg
+	for _, warning := range modeWarnings {
+		fmt.Println(warning)
+	}
 	if cfgChanged {
 		if err := saveConfig(cfg); err != nil {
 			return err
@@ -705,10 +940,8 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 		fmt.Println("Warning: ProRes playback on Windows requires QuickTime or VLC.")
 	}
 
-	if mode.Name() == capture.ModeDecklink {
-		if err := mode.SignalProbe(ffmpegPath, deviceInfo.VideoDisplay); err != nil {
-			fmt.Printf("Warning: No valid signal detected on %q. Recording will fail until a signal is present.\n", deviceInfo.VideoDisplay)
-		}
+	for _, warning := range startupProbeWarnings(ffmpegPath, resolvedDevices) {
+		fmt.Println(warning)
 	}
 
 	outDir := outputDir(cfg)
@@ -728,9 +961,17 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 	}
 	defer listener.Close()
 
-	rec := recorder.New(ffmpegPath, platform.Current())
+	primary := primaryDevice(resolvedDevices)
+	useMultiRecorder := len(resolvedDevices) > 1
+	singleRecorder := recorder.New(ffmpegPath, platform.Current())
+	multiRecorder := multirecorder.New(ffmpegPath, platform.Current())
+	multiDevices := toMultiRecorderDevices(resolvedDevices)
 
-	printRunSummary(cfg, mode, deviceInfo.VideoDisplay)
+	if useMultiRecorder {
+		printMultiRunSummary(cfg, resolvedDevices)
+	} else {
+		printRunSummary(cfg, primary.Mode, primary.Selected.VideoDisplay)
+	}
 	fmt.Println()
 	fmt.Println("Waiting for record trigger...")
 
@@ -740,8 +981,21 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 	for {
 		select {
 		case <-ctx.Done():
-			if rec.IsRecording() {
-				exit, err := rec.StopAndWait(context.Background())
+			if useMultiRecorder {
+				if multiRecorder.IsRecording() {
+					results, err := multiRecorder.Stop()
+					if err != nil {
+						return err
+					}
+					for _, result := range results {
+						fmt.Printf("Recording saved: %s\n", result.Exit.Filename)
+					}
+				}
+				return nil
+			}
+
+			if singleRecorder.IsRecording() {
+				exit, err := singleRecorder.StopAndWait(context.Background())
 				if err != nil {
 					return err
 				}
@@ -750,23 +1004,61 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 				}
 			}
 			return nil
-		case exit := <-rec.UnexpectedExit():
+		case exit := <-singleRecorder.UnexpectedExit():
+			if useMultiRecorder {
+				continue
+			}
 			fmt.Printf("Error: ffmpeg exited unexpectedly (code %d). Waiting for record trigger...\n", exit.Code)
+		case exit := <-multiRecorder.UnexpectedExit():
+			if !useMultiRecorder {
+				continue
+			}
+			fmt.Printf("Error: %s ffmpeg exited unexpectedly (code %d).\n", exit.Device.Name, exit.Exit.Code)
+			if !multiRecorder.IsRecording() {
+				fmt.Println("Waiting for record trigger...")
+			}
 		case message := <-triggerCh:
 			verbosef("OSC %s %v", message.Address, message.Arguments)
 
 			switch message.Address {
 			case cfg.OSC.RecordAddress:
-				if rec.IsRecording() {
+				if useMultiRecorder {
+					if multiRecorder.IsRecording() {
+						fmt.Println("Warning: Record trigger received but already recording. Ignoring.")
+						continue
+					}
+
+					results, err := multiRecorder.Start(
+						multiDevices,
+						cfg.Recording.Profile,
+						cfg.Recording.Prefix,
+						outDir,
+						recorder.Slate{
+							Show:  cfg.Recording.Show,
+							Scene: cfg.Recording.Scene,
+							Take:  cfg.Recording.Take,
+						},
+						verbose,
+					)
+					if err != nil {
+						return err
+					}
+					for _, result := range results {
+						fmt.Printf("Recording started: %s\n", result.Filename)
+					}
+					continue
+				}
+
+				if singleRecorder.IsRecording() {
 					fmt.Println("Warning: Record trigger received but already recording. Ignoring.")
 					continue
 				}
 
-				filename, err := rec.Start(
-					mode,
+				filename, err := singleRecorder.Start(
+					primary.Mode,
 					cfg.Recording.Profile,
-					deviceInfo.VideoConfigValue,
-					deviceInfo.AudioConfigValue,
+					primary.Selected.VideoConfigValue,
+					primary.Selected.AudioConfigValue,
 					cfg.Recording.Prefix,
 					outDir,
 					recorder.Slate{
@@ -781,12 +1073,29 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 				}
 				fmt.Printf("Recording started: %s\n", filename)
 			case cfg.OSC.StopAddress:
-				if !rec.IsRecording() {
+				if useMultiRecorder {
+					if !multiRecorder.IsRecording() {
+						fmt.Println("Warning: Stop trigger received but not recording. Ignoring.")
+						continue
+					}
+
+					results, err := multiRecorder.Stop()
+					if err != nil {
+						return err
+					}
+					for _, result := range results {
+						fmt.Printf("Recording saved: %s\n", result.Exit.Filename)
+					}
+					fmt.Println("Waiting for record trigger...")
+					continue
+				}
+
+				if !singleRecorder.IsRecording() {
 					fmt.Println("Warning: Stop trigger received but not recording. Ignoring.")
 					continue
 				}
 
-				exit, err := rec.StopAndWait(context.Background())
+				exit, err := singleRecorder.StopAndWait(context.Background())
 				if err != nil {
 					return err
 				}
@@ -807,6 +1116,20 @@ func printRunSummary(cfg cfgpkg.Config, mode capture.CaptureMode, deviceName str
 	fmt.Printf("  Prefix:      %s\n", cfg.Recording.Prefix)
 	fmt.Printf("  Output:      %s\n", outputDir(cfg))
 	fmt.Printf("  Device:      %s\n", deviceName)
+}
+
+func printMultiRunSummary(cfg cfgpkg.Config, devices []resolvedDevice) {
+	fmt.Println("osc-record running")
+	fmt.Printf("  OSC port:    %d\n", cfg.OSC.Port)
+	fmt.Printf("  Record:      %s\n", cfg.OSC.RecordAddress)
+	fmt.Printf("  Stop:        %s\n", cfg.OSC.StopAddress)
+	fmt.Printf("  Profile:     %s\n", cfg.Recording.Profile)
+	fmt.Printf("  Prefix:      %s\n", cfg.Recording.Prefix)
+	fmt.Printf("  Output:      %s\n", outputDir(cfg))
+	fmt.Println("  Devices:")
+	for _, device := range devices {
+		fmt.Printf("    - %s (%s)\n", device.Selected.VideoDisplay, device.Mode.Summary())
+	}
 }
 
 // openPath opens the given file path with the system default application.

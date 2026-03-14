@@ -50,16 +50,16 @@ type ClipInfo struct {
 	StartTime time.Time
 	Duration  time.Duration
 	SizeBytes int64
-	Verified  *bool  // nil = pending, true = ok, false = failed
+	Verified  *bool // nil = pending, true = ok, false = failed
 	VerifyErr []string
 }
 
 // Model is the root bubbletea model for the TUI.
 type Model struct {
-	keys   KeyMap
-	width  int
-	height int
-	cmdCh  chan UserCmd
+	keys    KeyMap
+	width   int
+	height  int
+	cmdCh   chan UserCmd
 	slateCh chan Slate
 
 	// Sub-models (panels)
@@ -74,9 +74,6 @@ type Model struct {
 
 	// Application state
 	recordState RecordingState
-	currentFile string
-	startTime   time.Time
-	fileSize    int64
 
 	// Signal state
 	signalLocked bool
@@ -121,20 +118,19 @@ type Overlay interface {
 }
 
 // New creates the root TUI model.
-func New(recordAddr, stopAddr, deviceName string) Model {
+func New(recordAddr, stopAddr string, deviceNames []string) Model {
 	m := Model{
-		keys:        DefaultKeyMap(),
-		cmdCh:       make(chan UserCmd, 8),
-		slateCh:     make(chan Slate, 4),
-		recordAddr:  recordAddr,
-		stopAddr:    stopAddr,
-		deviceName:  deviceName,
-		audioLeft:   -60,
-		audioRight:  -60,
+		keys:       DefaultKeyMap(),
+		cmdCh:      make(chan UserCmd, 8),
+		slateCh:    make(chan Slate, 4),
+		recordAddr: recordAddr,
+		stopAddr:   stopAddr,
+		audioLeft:  -60,
+		audioRight: -60,
 	}
 	m.oscPanel = NewOSCPanel(recordAddr, stopAddr)
 	m.signalPanel = NewSignalPanel()
-	m.statusPanel = NewStatusPanel()
+	m.statusPanel = NewStatusPanel(deviceNames)
 	m.clipsPanel = NewClipsPanel()
 	m.logPanel = NewLogPanel()
 	return m
@@ -154,6 +150,17 @@ func (m *Model) SetChecklistConfig(cfg ChecklistConfig) {
 
 func (m *Model) SetSlate(slate Slate) {
 	m.slate = slate
+}
+
+func (m *Model) SetStatusDevices(devices []DeviceStatus) {
+	names := make([]string, 0, len(devices))
+	for _, device := range devices {
+		names = append(names, device.Device)
+	}
+	m.statusPanel.SetDevices(names)
+	for _, device := range devices {
+		m.statusPanel.SetDeviceConfig(device.Device, device.CaptureMode, device.FormatCode)
+	}
 }
 
 // Init starts background ticks.
@@ -201,10 +208,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TickMsg:
 		m.blink = !m.blink
 		cmds = append(cmds, tickCmd())
-		// Update elapsed duration display
-		if m.recordState == StateRecording {
-			m.statusPanel.Elapsed = time.Since(m.startTime)
-		}
+		m.statusPanel.Tick(msg.Time)
 
 	case tea.KeyMsg:
 		cmd := m.handleKey(msg)
@@ -240,10 +244,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.oscPanel.Append(msg)
 
 	case RecordingStartedMsg:
-		m.recordState = StateRecording
-		m.currentFile = msg.File
-		m.startTime = msg.Time
-		m.fileSize = 0
 		clip := ClipInfo{
 			Index:     len(m.clips) + 1,
 			File:      msg.File,
@@ -252,21 +252,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clips = append(m.clips, clip)
 		m.clipsPanel.SetClips(m.clips)
-		m.statusPanel.SetRecording(msg.File, msg.Time)
+		m.statusPanel.SetRecording(msg.Device, msg.File, msg.Time)
+		m.syncRecordState()
 		m.addLog("Recording started: " + msg.File)
 
 	case RecordingStoppedMsg:
-		m.recordState = StateIdle
 		m.updateClip(msg.File, func(c *ClipInfo) {
 			c.Duration = msg.Duration
 			c.SizeBytes = msg.SizeBytes
 		})
 		m.clipsPanel.SetClips(m.clips)
-		m.statusPanel.SetIdle()
+		m.statusPanel.SetIdle(msg.Device)
+		m.syncRecordState()
 		m.addLog(fmt.Sprintf("Recording saved: %s (%s)", msg.File, fmtDuration(msg.Duration)))
 
 	case RecordingCrashedMsg:
-		m.recordState = StateError
+		m.statusPanel.SetError(msg.Device)
+		m.syncRecordState()
 		m.addLog(fmt.Sprintf("ffmpeg crashed: %v — partial clip: %s", msg.Err, msg.File))
 		if msg.Recoverable {
 			m.banner = "Recording crashed — attempting recovery..."
@@ -275,14 +277,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case RecordingResumedMsg:
-		m.recordState = StateIdle
+		m.syncRecordState()
 		m.banner = ""
 		m.addLog("Capture resumed after crash")
 
 	case FileSizeMsg:
-		m.fileSize = msg.SizeBytes
 		m.updateClip(msg.File, func(c *ClipInfo) { c.SizeBytes = msg.SizeBytes })
-		m.statusPanel.FileSize = msg.SizeBytes
+		m.statusPanel.SetFileSize(msg.File, msg.SizeBytes)
 
 	case ClipVerifiedMsg:
 		ok := msg.OK
@@ -483,8 +484,8 @@ func (m Model) viewMain() string {
 	leftW := 42
 	rightW := m.width - leftW - 3 // 3 for border/gap
 
-	topH := 9  // signal + osc panels
-	statusH := 4
+	topH := 9 // signal + osc panels
+	statusH := m.statusPanel.Height()
 	logH := m.height - topH - statusH - 3 // 3 for key bar + border
 
 	sig := m.signalPanel.View(leftW, topH)
@@ -499,7 +500,7 @@ func (m Model) viewMain() string {
 	// Error banner
 	var bannerLine string
 	if m.banner != "" {
-		bannerLine = styleBanner.Width(m.width - 4).Render("⚠  " + m.banner) + "\n"
+		bannerLine = styleBanner.Width(m.width-4).Render("⚠  "+m.banner) + "\n"
 	}
 
 	keys := KeyHints(
@@ -537,6 +538,26 @@ func (m *Model) updateClip(file string, fn func(*ClipInfo)) {
 			fn(&m.clips[i])
 			return
 		}
+	}
+}
+
+func (m *Model) syncRecordState() {
+	switch {
+	case m.statusPanel.AnyRecording():
+		m.recordState = StateRecording
+	default:
+		hasError := false
+		for _, device := range m.statusPanel.Devices {
+			if device.State == StateError {
+				hasError = true
+				break
+			}
+		}
+		if hasError {
+			m.recordState = StateError
+			return
+		}
+		m.recordState = StateIdle
 	}
 }
 
