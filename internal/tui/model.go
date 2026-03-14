@@ -322,6 +322,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WizardCancelledMsg:
 		m.overlay = nil
 
+	case PreviewGrabbedMsg:
+		if msg.Err != nil {
+			m.addLog("Preview failed: " + msg.Err.Error())
+			m.banner = "Preview failed: " + msg.Err.Error()
+		} else {
+			m.addLog("Preview: " + msg.Path)
+		}
+
 	case ClearBannerMsg:
 		m.banner = ""
 
@@ -369,6 +377,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, m.keys.Checklist):
 		m.overlay = NewChecklist(m.checklist)
 		return m.overlay.Init()
+
+	case key.Matches(msg, m.keys.Preview):
+		m.addLog("Grabbing preview frame...")
+		m.emitCommand(UserCmdGrabPreview)
 
 	case key.Matches(msg, m.keys.Scanner):
 		// TODO: launch scanner overlay

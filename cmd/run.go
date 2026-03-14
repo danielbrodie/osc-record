@@ -29,6 +29,7 @@ import (
 	"github.com/danielbrodie/osc-record/internal/manifest"
 	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 	"github.com/danielbrodie/osc-record/internal/platform"
+	"github.com/danielbrodie/osc-record/internal/preview"
 	"github.com/danielbrodie/osc-record/internal/recorder"
 	"github.com/danielbrodie/osc-record/internal/sigpoll"
 	"github.com/danielbrodie/osc-record/internal/tui"
@@ -487,6 +488,12 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					startRecording()
 				case tui.UserCmdStop:
 					stopRecording()
+				case tui.UserCmdGrabPreview:
+					go func() {
+						inputArgs := mode.BuildInputArgs(deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue)
+						path, err := preview.GrabFrame(ffmpegPath, inputArgs, deviceInfo.VideoDisplay)
+						sendToUI(tui.PreviewGrabbedMsg{Path: path, Err: err})
+					}()
 				}
 			case slate := <-slateCh:
 				currentSlate = recorder.Slate{

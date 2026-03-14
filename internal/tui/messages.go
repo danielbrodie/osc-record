@@ -131,3 +131,9 @@ type ErrorBannerMsg struct {
 
 // ClearBannerMsg dismisses the error banner.
 type ClearBannerMsg struct{}
+
+// PreviewGrabbedMsg is sent after a frame preview is captured and opened.
+type PreviewGrabbedMsg struct {
+	Path string
+	Err  error
+}
