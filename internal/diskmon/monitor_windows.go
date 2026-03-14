@@ -4,8 +4,14 @@ package diskmon
 
 import (
 	"syscall"
+	"unsafe"
 
 	"github.com/danielbrodie/osc-record/internal/tui"
+)
+
+var (
+	kernel32            = syscall.NewLazyDLL("kernel32.dll")
+	getDiskFreeSpaceExW = kernel32.NewProc("GetDiskFreeSpaceExW")
 )
 
 func sendDiskStat(path string, send func(tui.DiskStatMsg)) {
@@ -18,10 +24,14 @@ func sendDiskStat(path string, send func(tui.DiskStatMsg)) {
 		return
 	}
 
-	var freeBytesAvailable uint64
-	var totalBytes uint64
-	var totalFreeBytes uint64
-	if err := syscall.GetDiskFreeSpaceEx(pathPtr, &freeBytesAvailable, &totalBytes, &totalFreeBytes); err != nil {
+	var freeBytesAvailable, totalBytes, totalFreeBytes uint64
+	r, _, _ := getDiskFreeSpaceExW.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(unsafe.Pointer(&freeBytesAvailable)),
+		uintptr(unsafe.Pointer(&totalBytes)),
+		uintptr(unsafe.Pointer(&totalFreeBytes)),
+	)
+	if r == 0 {
 		return
 	}
 

@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -251,15 +250,13 @@ func checkOutputDir(cfg ChecklistConfig) tea.Cmd {
 func checkDiskSpace(cfg ChecklistConfig) tea.Cmd {
 	return func() tea.Msg {
 		result := CheckResult{Name: "Disk space", Fix: "Free at least 5GB in the output directory volume."}
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(cfg.OutputDir, &stat); err != nil {
+		free, err := diskFreeBytes(cfg.OutputDir)
+		if err != nil {
 			result.Detail = err.Error()
 			return ChecklistResultMsg{Results: []CheckResult{result}}
 		}
-
-		freeBytes := stat.Bavail * uint64(stat.Bsize)
-		result.OK = freeBytes > 5*1024*1024*1024
-		result.Detail = fmtBytesHuman(freeBytes) + " free"
+		result.OK = free > 5*1024*1024*1024
+		result.Detail = fmtBytesHuman(free) + " free"
 		return ChecklistResultMsg{Results: []CheckResult{result}}
 	}
 }
