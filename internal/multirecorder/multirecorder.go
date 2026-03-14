@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,32 +21,18 @@ type DeviceInfo struct {
 	AudioDevice string
 }
 
-type StartResult struct {
-	Device    DeviceInfo
-	Filename  string
-	Path      string
-	StartedAt time.Time
-}
-
-type StopResult struct {
-	Device    DeviceInfo
-	Exit      recorder.ExitStatus
-	StartedAt time.Time
-	Duration  time.Duration
-}
-
-type UnexpectedExit struct {
-	Device DeviceInfo
-	Exit   recorder.ExitStatus
-}
-
-type Recorder struct {
-	ffmpegPath      string
-	stopper         platform.Stopper
+type MultiRecorder struct {
 	mu              sync.Mutex
-	active          []*activeRecorder
-	stopWatchers    context.CancelFunc
-	unexpectedExitC chan UnexpectedExit
+	devices         []deviceRecorder
+	active          map[string]*activeRecorder
+	watchCancel     context.CancelFunc
+	stopping        bool
+	unexpectedExits chan recorder.ExitInfo
+}
+
+type deviceRecorder struct {
+	info     DeviceInfo
+	recorder *recorder.Recorder
 }
 
 type activeRecorder struct {
@@ -56,42 +43,47 @@ type activeRecorder struct {
 	startedAt time.Time
 }
 
-func New(ffmpegPath string, stopper platform.Stopper) *Recorder {
-	return &Recorder{
-		ffmpegPath:      ffmpegPath,
-		stopper:         stopper,
-		unexpectedExitC: make(chan UnexpectedExit, 8),
+// New creates one Recorder per device.
+func New(ffmpegPath string, platform platform.Platform, devices []DeviceInfo) *MultiRecorder {
+	entries := make([]deviceRecorder, 0, len(devices))
+	for _, device := range devices {
+		entries = append(entries, deviceRecorder{
+			info:     device,
+			recorder: recorder.New(ffmpegPath, platform),
+		})
+	}
+
+	return &MultiRecorder{
+		devices:         entries,
+		unexpectedExits: make(chan recorder.ExitInfo, len(devices)),
+		active:          make(map[string]*activeRecorder, len(devices)),
 	}
 }
 
-func (r *Recorder) UnexpectedExit() <-chan UnexpectedExit {
-	return r.unexpectedExitC
-}
-
-func (r *Recorder) IsRecording() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.active) > 0
-}
-
-func (r *Recorder) Start(devices []DeviceInfo, profile, prefix, outDir string, slate recorder.Slate, verbose bool) ([]StartResult, error) {
-	r.mu.Lock()
-	if len(r.active) > 0 {
-		r.mu.Unlock()
+// Start starts all recorders simultaneously. Returns an error if any start fails.
+func (m *MultiRecorder) Start(mode capture.CaptureMode, profile, prefix, outDir string, slate recorder.Slate, verbose bool) ([]string, error) {
+	m.mu.Lock()
+	if len(m.active) > 0 || m.stopping {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("recording already active")
 	}
-	r.mu.Unlock()
+	devices := append([]deviceRecorder(nil), m.devices...)
+	m.mu.Unlock()
+
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no devices configured")
+	}
 
 	startedAt := time.Now()
 	entries := make([]*activeRecorder, len(devices))
-	results := make([]StartResult, len(devices))
-	errs := make([]error, len(devices))
+	filenames := make([]string, len(devices))
+	errList := make([]error, len(devices))
 
 	var wg sync.WaitGroup
 	for i, device := range devices {
 		entry := &activeRecorder{
-			device:    device,
-			recorder:  recorder.New(r.ffmpegPath, r.stopper),
+			device:    device.info,
+			recorder:  device.recorder,
 			startedAt: startedAt,
 		}
 		entries[i] = entry
@@ -102,134 +94,152 @@ func (r *Recorder) Start(devices []DeviceInfo, profile, prefix, outDir string, s
 
 			filename, err := current.recorder.StartAt(
 				startedAt,
-				current.device.Mode,
+				modeForDevice(mode, current.device),
 				profile,
 				current.device.VideoDevice,
 				current.device.AudioDevice,
 				prefix,
 				outDir,
 				slate,
-				current.device.Name,
+				shortName(current.device.Name),
 				verbose,
 			)
 			if err != nil {
-				errs[index] = fmt.Errorf("%s: %w", current.device.Name, err)
+				errList[index] = fmt.Errorf("%s: %w", current.device.Name, err)
 				return
 			}
 
 			current.filename = filename
 			current.path = filepath.Join(outDir, filename)
-			results[index] = StartResult{
-				Device:    current.device,
-				Filename:  filename,
-				Path:      current.path,
-				StartedAt: startedAt,
-			}
+			filenames[index] = filename
 		}(i, entry)
 	}
 	wg.Wait()
 
-	if err := errors.Join(errs...); err != nil {
-		return nil, errors.Join(err, r.stopStarted(entries))
+	if err := errors.Join(errList...); err != nil {
+		return nil, errors.Join(err, m.stopStarted(entries))
 	}
 
 	watchCtx, cancel := context.WithCancel(context.Background())
 
-	r.mu.Lock()
-	r.active = entries
-	r.stopWatchers = cancel
-	r.mu.Unlock()
+	m.mu.Lock()
+	for _, entry := range entries {
+		m.active[entry.filename] = entry
+	}
+	m.watchCancel = cancel
+	m.mu.Unlock()
 
 	for _, entry := range entries {
-		go r.watchUnexpectedExit(watchCtx, entry)
+		go m.watchUnexpectedExit(watchCtx, entry)
 	}
 
-	return results, nil
+	return filenames, nil
 }
 
-func (r *Recorder) Stop() ([]StopResult, error) {
-	r.mu.Lock()
-	if len(r.active) == 0 {
-		r.mu.Unlock()
-		return nil, fmt.Errorf("not recording")
+// Stop stops all recorders and waits for them to finish.
+func (m *MultiRecorder) Stop() map[string]error {
+	m.mu.Lock()
+	if len(m.active) == 0 {
+		m.mu.Unlock()
+		return map[string]error{}
 	}
 
-	entries := append([]*activeRecorder(nil), r.active...)
-	r.active = nil
-	cancel := r.stopWatchers
-	r.stopWatchers = nil
-	r.mu.Unlock()
+	entries := make([]*activeRecorder, 0, len(m.active))
+	for _, entry := range m.active {
+		entries = append(entries, entry)
+	}
+	m.stopping = true
+	cancel := m.watchCancel
+	m.watchCancel = nil
+	m.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
 
-	results := make([]StopResult, len(entries))
-	errs := make([]error, len(entries))
-
-	var wg sync.WaitGroup
-	for i, entry := range entries {
+	results := make(map[string]error, len(entries))
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+	)
+	for _, entry := range entries {
 		wg.Add(1)
-		go func(index int, current *activeRecorder) {
+		go func(current *activeRecorder) {
 			defer wg.Done()
-
-			exit, err := current.recorder.StopAndWait(context.Background())
-			if err != nil {
-				errs[index] = fmt.Errorf("%s: %w", current.device.Name, err)
-				return
-			}
-
-			results[index] = StopResult{
-				Device:    current.device,
-				Exit:      exit,
-				StartedAt: current.startedAt,
-				Duration:  time.Since(current.startedAt),
-			}
-		}(i, entry)
+			_, err := current.recorder.StopAndWait(context.Background())
+			mu.Lock()
+			results[current.filename] = err
+			mu.Unlock()
+		}(entry)
 	}
 	wg.Wait()
 
-	return results, errors.Join(errs...)
+	m.mu.Lock()
+	m.active = make(map[string]*activeRecorder, len(m.devices))
+	m.stopping = false
+	m.mu.Unlock()
+
+	return results
 }
 
-func (r *Recorder) stopStarted(entries []*activeRecorder) error {
-	errs := make([]error, 0, len(entries))
+// IsRecording returns true if any recorder is still active.
+func (m *MultiRecorder) IsRecording() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.active) > 0
+}
+
+// UnexpectedExits returns a channel that receives any unexpected recorder exit.
+func (m *MultiRecorder) UnexpectedExits() <-chan recorder.ExitInfo {
+	return m.unexpectedExits
+}
+
+func (m *MultiRecorder) stopStarted(entries []*activeRecorder) error {
+	errList := make([]error, 0, len(entries))
 	for _, entry := range entries {
 		if entry == nil || !entry.recorder.IsRecording() {
 			continue
 		}
 		if _, err := entry.recorder.StopAndWait(context.Background()); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", entry.device.Name, err))
+			errList = append(errList, fmt.Errorf("%s: %w", entry.device.Name, err))
 		}
 	}
-	return errors.Join(errs...)
+	return errors.Join(errList...)
 }
 
-func (r *Recorder) watchUnexpectedExit(ctx context.Context, entry *activeRecorder) {
+func (m *MultiRecorder) watchUnexpectedExit(ctx context.Context, entry *activeRecorder) {
 	select {
 	case exit := <-entry.recorder.UnexpectedExit():
-		r.removeActive(entry.recorder)
+		m.removeActive(entry.filename)
 		select {
-		case r.unexpectedExitC <- UnexpectedExit{Device: entry.device, Exit: exit}:
+		case m.unexpectedExits <- exit:
 		default:
 		}
 	case <-ctx.Done():
 	}
 }
 
-func (r *Recorder) removeActive(target *recorder.Recorder) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (m *MultiRecorder) removeActive(filename string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	filtered := r.active[:0]
-	for _, entry := range r.active {
-		if entry.recorder == target {
-			continue
-		}
-		filtered = append(filtered, entry)
+	delete(m.active, filename)
+	if len(m.active) == 0 {
+		m.watchCancel = nil
 	}
-	r.active = filtered
-	if len(r.active) == 0 {
-		r.stopWatchers = nil
+}
+
+func modeForDevice(defaultMode capture.CaptureMode, device DeviceInfo) capture.CaptureMode {
+	if device.Mode != nil {
+		return device.Mode
 	}
+	return defaultMode
+}
+
+func shortName(name string) string {
+	parts := strings.Fields(name)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
 }

@@ -21,6 +21,8 @@ type ExitStatus struct {
 	Path     string
 }
 
+type ExitInfo = ExitStatus
+
 type Recorder struct {
 	ffmpegPath      string
 	stopper         platform.Stopper
