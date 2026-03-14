@@ -538,9 +538,19 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	for _, warning := range modeWarnings {
 		logWarning(warning)
 	}
+	fmt.Print("Starting osc-record")
+	for i, d := range resolvedDevices {
+		if i == 0 {
+			fmt.Printf(" (%s", d.Selected.VideoDisplay)
+		} else {
+			fmt.Printf(", %s", d.Selected.VideoDisplay)
+		}
+	}
+	fmt.Print(")... ")
 	for _, warning := range startupProbeWarnings(ffmpegPath, resolvedDevices) {
 		logWarning(warning)
 	}
+	fmt.Println("ready.")
 
 	listener, err := listenTUICOSC(cfg.OSC.Port, func(message tuiOSCMessage) {
 		sendToUI(tui.OSCReceivedMsg{
