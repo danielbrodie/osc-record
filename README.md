@@ -1,145 +1,275 @@
 # osc-record
 
-OSC-triggered video capture for live production. Send an OSC message from QLab, Disguise, a lighting console, or any OSC source — recording starts. Send another — it stops. Files land wherever you point it.
+OSC-triggered video capture for live production. Send an OSC message from QLab, Disguise, a lighting console, or any OSC source — recording starts on every configured device simultaneously. Send another — everything stops and files are saved.
 
-Built for theatrical environments where you need frame-accurate, hands-free recording triggered by show control.
+Built for theatrical environments where recording needs to be hands-free, show-control-driven, and rock solid.
+
+---
+
+## What it does
+
+- **OSC-triggered**: any OSC-capable show control system can start and stop recording
+- **Multi-device**: one trigger fires all devices simultaneously — decklink cards, webcams, or mixed
+- **Full TUI**: live signal status, VU meters, OSC monitor, clip list, disk usage — all in terminal
+- **Automation-friendly**: `--no-tui` flag and non-TTY auto-detection for headless/cron use
+- **Blackmagic DeckLink first**: decklink mode auto-selects if supported; avfoundation/dshow as fallback
+- **HTTP status API**: `/status`, `/clips`, `/health` for integration with other systems
+- **Post-show manifest**: JSON log of every clip from the session
+
+---
 
 ## Install
 
-```
+### macOS (Homebrew)
+
+```sh
 brew tap danielbrodie/tap
 brew install osc-record
 ```
 
-> **Blackmagic device?** For decklink capture (recommended), you need ffmpeg compiled with decklink support and the [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers installed. Without decklink, osc-record falls back to avfoundation/dshow which requires manual format configuration.
->
-> decklink-enabled ffmpeg:
-> ```
-> brew tap homebrew-ffmpeg/ffmpeg
-> brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-decklink
-> ```
+This installs `osc-record` and a pre-built ffmpeg with DeckLink support. You also need [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers installed for decklink capture.
+
+### Manual (all platforms)
+
+Download the latest binary from [Releases](https://github.com/danielbrodie/osc-record/releases) and put it in your `$PATH`.
+
+You need ffmpeg in your `$PATH` (or set `ffmpeg.path` in config). For Blackmagic devices, ffmpeg must be built with `--enable-decklink`.
+
+### Windows
+
+Download `osc-record_windows_amd64.zip` from [Releases](https://github.com/danielbrodie/osc-record/releases). Requires ffmpeg with DeckLink support and Blackmagic Desktop Video drivers.
+
+---
 
 ## Quick Start
 
-**1. Learn your OSC triggers:**
-```
-osc-record capture record   # fire your record cue, press Enter to save
-osc-record capture stop     # fire your stop cue, press Enter to save
+### 1. Run setup
+
+```sh
+osc-record setup
 ```
 
-**2. Run:**
+The setup wizard walks you through: picking your capture device, configuring your record/stop OSC addresses (it listens for a real OSC message so you just fire the cue), setting output directory and filename prefix. Config is saved automatically.
+
+For headless/automation environments:
+
+```sh
+osc-record setup --no-tui
 ```
+
+### 2. Start recording
+
+```sh
 osc-record run
 ```
 
-On first run, osc-record probes for capture devices and shows a picker if `device.name` isn't set in config. Select your device — it's saved automatically.
+The TUI launches showing signal lock status, VU meters, OSC monitor, and clip list. Send your record OSC message — recording starts on all devices. Send the stop message — files are saved.
 
-**3. Trigger from QLab / Disguise / console:**
+### 3. Non-interactive / headless
 
-Send the OSC address you learned in step 1 to `<felix-ip>:8000`. Recording starts. Send the stop address — file is saved.
+```sh
+osc-record run --no-tui
+```
+
+Runs as a plain daemon. Prints status lines to stdout. Works in systemd, launchd, tmux sessions, cron-triggered automation.
+
+---
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `osc-record run` | Start the daemon — listens for OSC, records on trigger |
+| `osc-record run` | Start the daemon |
+| `osc-record setup` | Interactive setup wizard |
 | `osc-record devices` | List available capture devices |
-| `osc-record capture record` | Interactively learn the record OSC address |
-| `osc-record capture stop` | Interactively learn the stop OSC address |
+| `osc-record config` | Print resolved config |
+| `osc-record manifest` | Generate a JSON manifest of recorded clips |
 | `osc-record version` | Print version |
 
 ### `run` flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 8000 | OSC listen port |
+| `--port` | `8000` | OSC UDP listen port |
 | `--output` | `~/Dropbox/osc-record` | Output directory |
 | `--prefix` | `recording` | Filename prefix |
 | `--profile` | `h264` | Encoding profile: `h264`, `hevc`, `prores` |
-| `--video-device` | from config | Override video device |
+| `--video-device` | from config | Override video device name |
 | `--capture-mode` | `auto` | `auto`, `decklink`, `avfoundation`, `dshow` |
-| `--config` | `~/.config/osc-record/config.toml` | Config file path |
+| `--no-tui` | `false` | Disable TUI, run as plain daemon |
+| `--config` | see below | Path to config file |
 
-## Config
+Default config path: `~/.config/osc-record/config.toml` (macOS/Linux), `%APPDATA%\osc-record\config.toml` (Windows).
 
-Config lives at `~/.config/osc-record/config.toml` (macOS/Linux) or `%APPDATA%\osc-record\config.toml` (Windows). Auto-created on first run.
+---
+
+## Configuration
+
+Config is auto-created on first run (or via `osc-record setup`).
+
+### Single device
 
 ```toml
 [osc]
-  port = 8000
-  record_address = "/record/start"
-  stop_address = "/record/stop"
+port = 8000
+record_address = "/start/record/"
+stop_address = "/stop/record/"
 
 [device]
-  capture_mode = "auto"       # auto, decklink, avfoundation, dshow
-  name = "UltraStudio Recorder 3G"
-  audio = ""                  # avfoundation/dshow only
-  format_code = "Hp59"        # decklink only — leave empty to autodetect
-                              # run: ffmpeg -f decklink -list_formats 1 -i "Device Name"
+capture_mode = "decklink"          # decklink | avfoundation | dshow | auto
+name = "UltraStudio Recorder 3G"
+format_code = "Hp59"               # decklink only — see Format Codes below
+video_input = ""                   # decklink only: sdi | hdmi | component | auto
 
 [recording]
-  profile = "h264"            # h264, hevc, prores
-  prefix = "recording"
-  output_dir = "~/Dropbox/osc-record/"
+profile = "h264"                   # h264 | hevc | prores
+prefix = "SHOW"
+output_dir = "~/Dropbox/recordings/"
 
 [ffmpeg]
-  path = ""                   # leave empty to use $PATH
+path = ""                          # leave empty to use ffmpeg from $PATH
 ```
 
-Legacy single-device config stays valid. For synchronized multi-device recording, use `[[devices]]` instead of `[device]`:
+### Multi-device (synchronized)
+
+Use `[[devices]]` array instead of `[device]`. One OSC trigger starts and stops all devices simultaneously.
 
 ```toml
 [osc]
-  port = 8000
-  record_address = "/record/start"
-  stop_address = "/record/stop"
+port = 8000
+record_address = "/start/record/"
+stop_address = "/stop/record/"
 
 [[devices]]
-  capture_mode = "decklink"
-  name = "UltraStudio Recorder 3G"
-  format_code = "Hp59"
+name = "UltraStudio Recorder 3G"
+capture_mode = "decklink"
+format_code = "24ps"
+video_input = "hdmi"
 
 [[devices]]
-  capture_mode = "decklink"
-  name = "UltraStudio 4K Mini"
-  format_code = "Hp59"
+name = "UltraStudio 4K Mini"
+capture_mode = "decklink"
+format_code = "4k24"
+
+[[devices]]
+name = "HD Pro Webcam C920"
+capture_mode = "avfoundation"
+audio = "HD Pro Webcam C920"
 
 [recording]
-  profile = "h264"
-  prefix = "TEST"
-  output_dir = "~/Dropbox/osc-record/"
+profile = "h264"
+prefix = "SHOW"
+output_dir = "~/Dropbox/recordings/"
 ```
 
-### `device.format_code`
+Output files are named `{prefix}-{DeviceShortName}-{YYYY-MM-DD-HHmmss}.mp4`. With a single device, the short name is omitted.
 
-Most decklink devices autodetect the incoming signal format. Some (including the UltraStudio Recorder 3G over SDI) do not. If you get a "Cannot Autodetect input stream" error, set `format_code` to the matching code for your signal.
+---
 
-List supported codes for your device:
-```
+## Format Codes (DeckLink)
+
+Most DeckLink devices autodetect the incoming signal. Some (including UltraStudio Recorder 3G over SDI) require `format_code` to be set explicitly. If you get `Cannot Autodetect input stream`, set this.
+
+List the codes supported by your device:
+
+```sh
 ffmpeg -f decklink -list_formats 1 -i "Your Device Name"
 ```
 
-Common codes: `Hp59` (1080p59.94), `Hp29` (1080p29.97), `Hi59` (1080i59.94), `23ps` (1080p23.976)
+Common codes:
 
-## Output Files
+| Code | Format |
+|------|--------|
+| `Hp59` | 1080p 59.94 fps |
+| `Hp50` | 1080p 50 fps |
+| `Hp30` | 1080p 30 fps |
+| `Hp29` | 1080p 29.97 fps |
+| `Hp25` | 1080p 25 fps |
+| `24ps` | 1080p 24 fps (rec709) |
+| `23ps` | 1080p 23.976 fps |
+| `Hi59` | 1080i 59.94 fps |
+| `Hi50` | 1080i 50 fps |
+| `4k24` | 2160p 24 fps |
+| `4k25` | 2160p 25 fps |
+| `4k30` | 2160p 30 fps |
 
-Files are named `{prefix}-{YYYY-MM-DD-HHmmss}.{ext}` and saved to `output_dir`. With multi-device config, osc-record appends each device's short name before the timestamp, so one trigger produces one file per device: `{prefix}-{shortName}-{YYYY-MM-DD-HHmmss}.{ext}`.
+---
+
+## TUI Overview
+
+The TUI has five panels:
+
+```
+┌─ SIGNAL ──────────────────────────┐  ┌─ STATUS ───────────────────────────┐
+│ ● SDI  1920×1080  24.00 fps       │  │ IDLE                               │
+│ L ███████░░░░░░░░  -42 dBFS       │  │ Device: UltraStudio Recorder 3G    │
+│ R ███████░░░░░░░░  -44 dBFS       │  │ Profile: h264                      │
+└───────────────────────────────────┘  └────────────────────────────────────┘
+┌─ OSC ─────────────────────────────┐
+│ Listening on :8000                │  ┌─ CLIPS ────────────────────────────┐
+│ /start/record/ → 192.168.0.10     │  │ #1  SHOW-2026-03-14-200000.mp4 ✓  │
+│ /stop/record/  → 192.168.0.10     │  │ #2  SHOW-2026-03-14-201500.mp4 ✓  │
+└───────────────────────────────────┘  └────────────────────────────────────┘
+┌─ LOG ─────────────────────────────────────────────────────────────────────┐
+│ 20:00:00  Signal locked: 1080p24                                          │
+│ 20:00:15  Recording started: SHOW-2026-03-14-200015.mp4                   │
+└───────────────────────────────────────────────────────────────────────────┘
+[R] Record  [S] Stop  [P] Preview  [V] View clip  [F1] Scan  [?] Help  [Q] Quit
+```
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `R` | Start recording |
+| `S` | Stop recording |
+| `P` | Grab preview frame → open in system image viewer |
+| `V` | Open last clip in system video player |
+| `T` | Reset take counter |
+| `F1` | Signal scanner — probe all format codes on the device |
+| `F2` | Pre-show checklist overlay |
+| `W` | Setup wizard overlay |
+| `?` | Help overlay |
+| `Q` | Quit (confirmation required if recording) |
+
+---
+
+## HTTP Status API
+
+When `http.port` is set in config (e.g. `8080`), osc-record exposes:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /status` | Current recording state, active device, elapsed time |
+| `GET /clips` | List of clips recorded this session |
+| `GET /health` | `{"ok": true}` — for load balancer health checks |
+
+```toml
+[http]
+port = 8080
+```
+
+---
 
 ## Capture Modes
 
-**decklink** (recommended with Blackmagic devices): Uses ffmpeg's native DeckLink integration. Auto-detects signal format, embeds audio from SDI. Requires ffmpeg built with `--enable-decklink` and Blackmagic Desktop Video drivers.
+**`decklink`** — Recommended for Blackmagic hardware. Uses ffmpeg's native DeckLink integration. Embeds SDI audio. Requires ffmpeg built with `--enable-decklink` and Blackmagic Desktop Video drivers installed. Auto-selects if supported.
 
-**avfoundation** (macOS fallback): Uses macOS's AVFoundation framework. Works without special ffmpeg builds. Requires manual format configuration if signal doesn't match defaults.
+**`avfoundation`** — macOS fallback. No special ffmpeg required. Set `audio` to the matching audio device name if needed.
 
-**dshow** (Windows fallback): DirectShow equivalent of avfoundation.
+**`dshow`** — Windows fallback. DirectShow equivalent.
 
-`auto` mode tries decklink first and falls back automatically.
+**`auto`** — Tries decklink first. Falls back to avfoundation (macOS) or dshow (Windows) if decklink is unavailable.
+
+---
 
 ## Requirements
 
 - macOS 12+ or Windows 10+
 - ffmpeg in `$PATH` (or set `ffmpeg.path` in config)
-- For decklink: Blackmagic Desktop Video 14.3+, ffmpeg with `--enable-decklink`
+- **For DeckLink capture**: [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) 14.3+, ffmpeg with `--enable-decklink`
+
+---
 
 ## License
 
