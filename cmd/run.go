@@ -251,7 +251,13 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		RecordAddress: cfg.OSC.RecordAddress,
 		StopAddress:   cfg.OSC.StopAddress,
 	})
+	model.SetSlate(tui.Slate{
+		Show:  cfg.Recording.Show,
+		Scene: cfg.Recording.Scene,
+		Take:  cfg.Recording.Take,
+	})
 	commandCh := model.Commands()
+	slateCh := model.SlateChanges()
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	oscCh := make(chan tuiOSCMessage, 32)
 	clipVerifier := verifier.Verifier{}
@@ -387,6 +393,11 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			recordingPath    string
 			recordingStarted time.Time
 			stopSizePoller   context.CancelFunc
+			currentSlate     = recorder.Slate{
+				Show:  cfg.Recording.Show,
+				Scene: cfg.Recording.Scene,
+				Take:  cfg.Recording.Take,
+			}
 		)
 
 		cancelSizePoller := func() {
@@ -402,7 +413,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			}
 
 			poller.Suspend()
-			filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, verbose)
+			filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, currentSlate, verbose)
 			if err != nil {
 				poller.Resume()
 				sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
@@ -477,6 +488,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				case tui.UserCmdStop:
 					stopRecording()
 				}
+			case slate := <-slateCh:
+				currentSlate = recorder.Slate{
+					Show:  slate.Show,
+					Scene: slate.Scene,
+					Take:  slate.Take,
+				}
+				cfg.Recording.Show = slate.Show
+				cfg.Recording.Scene = slate.Scene
+				cfg.Recording.Take = slate.Take
 			case exit := <-rec.UnexpectedExit():
 				cancelSizePoller()
 				poller.Resume()
@@ -707,7 +727,20 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 					continue
 				}
 
-				filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, verbose)
+				filename, err := rec.Start(
+					mode,
+					cfg.Recording.Profile,
+					deviceInfo.VideoConfigValue,
+					deviceInfo.AudioConfigValue,
+					cfg.Recording.Prefix,
+					outDir,
+					recorder.Slate{
+						Show:  cfg.Recording.Show,
+						Scene: cfg.Recording.Scene,
+						Take:  cfg.Recording.Take,
+					},
+					verbose,
+				)
 				if err != nil {
 					return err
 				}

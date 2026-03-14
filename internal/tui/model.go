@@ -60,6 +60,7 @@ type Model struct {
 	width  int
 	height int
 	cmdCh  chan UserCmd
+	slateCh chan Slate
 
 	// Sub-models (panels)
 	oscPanel    OSCPanel
@@ -107,6 +108,7 @@ type Model struct {
 	deviceName string
 
 	checklist ChecklistConfig
+	slate     Slate
 }
 
 // Overlay is an interface for overlay panels (wizard, scanner, checklist, etc.)
@@ -123,6 +125,7 @@ func New(recordAddr, stopAddr, deviceName string) Model {
 	m := Model{
 		keys:        DefaultKeyMap(),
 		cmdCh:       make(chan UserCmd, 8),
+		slateCh:     make(chan Slate, 4),
 		recordAddr:  recordAddr,
 		stopAddr:    stopAddr,
 		deviceName:  deviceName,
@@ -141,8 +144,16 @@ func (m Model) Commands() <-chan UserCmd {
 	return m.cmdCh
 }
 
+func (m Model) SlateChanges() <-chan Slate {
+	return m.slateCh
+}
+
 func (m *Model) SetChecklistConfig(cfg ChecklistConfig) {
 	m.checklist = cfg
+}
+
+func (m *Model) SetSlate(slate Slate) {
+	m.slate = slate
 }
 
 // Init starts background ticks.
@@ -297,6 +308,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ClearBannerMsg:
 		m.banner = ""
+
+	case SlateSavedMsg:
+		m.slate = msg.Slate
 	}
 
 	// Propagate to sub-panels that need independent update cycles
@@ -342,6 +356,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, m.keys.Scanner):
 		// TODO: launch scanner overlay
+
+	case key.Matches(msg, m.keys.SlateName):
+		m.overlay = NewSlateOverlay(m.slate, m.slateCh)
+		return m.overlay.Init()
 
 	case key.Matches(msg, m.keys.Wizard):
 		// TODO: launch wizard overlay
@@ -416,6 +434,7 @@ func (m Model) viewMain() string {
 	keys := KeyHints(
 		"R", "Record",
 		"S", "Stop",
+		"N", "Slate",
 		"P", "Preview",
 		"F1", "Scan",
 		"F2", "Checklist",

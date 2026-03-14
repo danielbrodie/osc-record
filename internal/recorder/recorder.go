@@ -29,6 +29,12 @@ type Recorder struct {
 	unexpectedExitC chan ExitStatus
 }
 
+type Slate struct {
+	Show  string
+	Scene string
+	Take  string
+}
+
 type recording struct {
 	cmd           *exec.Cmd
 	stdin         io.WriteCloser
@@ -56,7 +62,7 @@ func (r *Recorder) IsRecording() bool {
 	return r.current != nil
 }
 
-func (r *Recorder) Start(mode capture.CaptureMode, profile, videoDevice, audioDevice, prefix, outDir string, verbose bool) (string, error) {
+func (r *Recorder) Start(mode capture.CaptureMode, profile, videoDevice, audioDevice, prefix, outDir string, slate Slate, verbose bool) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -64,10 +70,10 @@ func (r *Recorder) Start(mode capture.CaptureMode, profile, videoDevice, audioDe
 		return "", fmt.Errorf("recording already active")
 	}
 
-	filename := buildFilename(prefix, profile)
+	filename := buildFilename(prefix, profile, slate)
 	fullPath := filepath.Join(outDir, filename)
 
-	args, err := buildArgs(mode, profile, videoDevice, audioDevice, fullPath)
+	args, err := buildArgs(mode, profile, videoDevice, audioDevice, fullPath, slate)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +136,7 @@ func ValidProfile(profile string) bool {
 	}
 }
 
-func buildArgs(mode capture.CaptureMode, profile, videoDevice, audioDevice, output string) ([]string, error) {
+func buildArgs(mode capture.CaptureMode, profile, videoDevice, audioDevice, output string, slate Slate) ([]string, error) {
 	if !ValidProfile(profile) {
 		return nil, fmt.Errorf("invalid profile %q", profile)
 	}
@@ -144,11 +150,31 @@ func buildArgs(mode capture.CaptureMode, profile, videoDevice, audioDevice, outp
 	case "hevc":
 		args = append(args, "-c:v", "libx265", "-crf", "22", "-preset", "fast", "-c:a", "aac", "-b:a", "192k")
 	}
+	if slate.Show != "" {
+		args = append(args, "-metadata", "show="+slate.Show)
+	}
+	if slate.Scene != "" {
+		args = append(args, "-metadata", "scene="+slate.Scene)
+	}
+	if slate.Take != "" {
+		args = append(args, "-metadata", "take="+slate.Take)
+	}
 	args = append(args, output)
 	return args, nil
 }
 
-func buildFilename(prefix, profile string) string {
+func buildFilename(prefix, profile string, slate Slate) string {
+	if slate.Show != "" && slate.Scene != "" && slate.Take != "" {
+		return fmt.Sprintf(
+			"%s-%s-%s-%s%s",
+			sanitizePrefix(slate.Show),
+			sanitizePrefix(slate.Scene),
+			sanitizePrefix(slate.Take),
+			time.Now().Format("2006-01-02-150405"),
+			extensionForProfile(profile),
+		)
+	}
+
 	safePrefix := sanitizePrefix(prefix)
 	if safePrefix == "" {
 		safePrefix = "recording"
