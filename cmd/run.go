@@ -395,6 +395,15 @@ func promptForDevice(items []devices.Device, label string, singlePrompt bool) (d
 }
 
 func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
+	// Apply defaults for any unconfigured OSC addresses (e.g. after a failed setup).
+	defaults := cfgpkg.Defaults()
+	if cfg.OSC.RecordAddress == "" {
+		cfg.OSC.RecordAddress = defaults.OSC.RecordAddress
+	}
+	if cfg.OSC.StopAddress == "" {
+		cfg.OSC.StopAddress = defaults.OSC.StopAddress
+	}
+
 	resolvedDevices, updatedCfg, modeWarnings, cfgChanged, err := resolveConfiguredDevices(ffmpegPath, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
 	if err != nil {
 		return err
@@ -1076,11 +1085,14 @@ func fileSize(path string) int64 {
 
 // runPlaintext is the v0.1 plaintext path, extracted so runTUI can call it as fallback.
 func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
+	defaults := cfgpkg.Defaults()
 	if cfg.OSC.RecordAddress == "" {
-		return errors.New("Error: No record trigger configured. Run 'osc-record capture record' first.")
+		cfg.OSC.RecordAddress = defaults.OSC.RecordAddress
+		fmt.Printf("Note: No record address configured — using default %s\n", cfg.OSC.RecordAddress)
 	}
 	if cfg.OSC.StopAddress == "" {
-		return errors.New("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
+		cfg.OSC.StopAddress = defaults.OSC.StopAddress
+		fmt.Printf("Note: No stop address configured — using default %s\n", cfg.OSC.StopAddress)
 	}
 
 	resolvedDevices, updatedCfg, modeWarnings, cfgChanged, err := resolveConfiguredDevices(ffmpegPath, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
