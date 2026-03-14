@@ -86,6 +86,30 @@ Config lives at `~/.config/osc-record/config.toml` (macOS/Linux) or `%APPDATA%\o
   path = ""                   # leave empty to use $PATH
 ```
 
+Legacy single-device config stays valid. For synchronized multi-device recording, use `[[devices]]` instead of `[device]`:
+
+```toml
+[osc]
+  port = 8000
+  record_address = "/record/start"
+  stop_address = "/record/stop"
+
+[[devices]]
+  capture_mode = "decklink"
+  name = "UltraStudio Recorder 3G"
+  format_code = "Hp59"
+
+[[devices]]
+  capture_mode = "decklink"
+  name = "UltraStudio 4K Mini"
+  format_code = "Hp59"
+
+[recording]
+  profile = "h264"
+  prefix = "TEST"
+  output_dir = "~/Dropbox/osc-record/"
+```
+
 ### `device.format_code`
 
 Most decklink devices autodetect the incoming signal format. Some (including the UltraStudio Recorder 3G over SDI) do not. If you get a "Cannot Autodetect input stream" error, set `format_code` to the matching code for your signal.
@@ -99,7 +123,7 @@ Common codes: `Hp59` (1080p59.94), `Hp29` (1080p29.97), `Hi59` (1080i59.94), `23
 
 ## Output Files
 
-Files are named `{prefix}-{YYYY-MM-DD-HHmmss}.{ext}` and saved to `output_dir`. Each record/stop cycle produces one file.
+Files are named `{prefix}-{YYYY-MM-DD-HHmmss}.{ext}` and saved to `output_dir`. With multi-device config, osc-record appends the device name to the prefix so one trigger produces one file per device.
 
 ## Capture Modes
 

@@ -114,10 +114,10 @@ func buildEntry(path string, clip tui.ClipInfo) (Entry, error) {
 	}
 
 	entry := Entry{
-		File:     filepath.Base(path),
-		Duration: clip.Duration,
+		File:      filepath.Base(path),
+		Duration:  clip.Duration,
 		SizeBytes: clip.SizeBytes,
-		Status:   clipStatus(clip),
+		Status:    clipStatus(clip),
 	}
 
 	for _, stream := range probe.Streams {
@@ -186,7 +186,7 @@ func render(entries []Entry, cfg config.Config, outputDir string, now time.Time)
 		"osc-record session manifest",
 		"Generated: " + now.Format("2006-01-02 15:04:05"),
 		"Show:      " + valueOrDash(cfg.Recording.Show),
-		fmt.Sprintf("Device:    %s  (%s  %s)", valueOrDash(cfg.Device.Name), valueOrDash(cfg.Device.CaptureMode), valueOrDash(cfg.Device.FormatCode)),
+		"Devices:   " + deviceSummary(cfg),
 		"Output:    " + outputDir,
 		"",
 		"#\tFile\tShow\tScene\tTake\tTC In\tDuration\tSize\tStatus\tCodec",
@@ -238,6 +238,23 @@ func valueOrDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func deviceSummary(cfg config.Config) string {
+	devices := cfg.ActiveDevices()
+	parts := make([]string, 0, len(devices))
+	for _, device := range devices {
+		parts = append(parts, fmt.Sprintf(
+			"%s (%s %s)",
+			valueOrDash(device.Name),
+			valueOrDash(device.CaptureMode),
+			valueOrDash(device.FormatCode),
+		))
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func maxInt64(value, minimum int64) int64 {
