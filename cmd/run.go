@@ -26,6 +26,7 @@ import (
 	"github.com/danielbrodie/osc-record/internal/diskmon"
 	"github.com/danielbrodie/osc-record/internal/devices"
 	"github.com/danielbrodie/osc-record/internal/health"
+	"github.com/danielbrodie/osc-record/internal/manifest"
 	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 	"github.com/danielbrodie/osc-record/internal/platform"
 	"github.com/danielbrodie/osc-record/internal/recorder"
@@ -497,6 +498,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	<-runnerDone
 	if rec.IsRecording() {
 		_, _ = rec.StopAndWait(context.Background())
+	}
+	statusMu.Lock()
+	clipsForManifest := make([]tui.ClipInfo, len(sessionClips))
+	copy(clipsForManifest, sessionClips)
+	statusMu.Unlock()
+	if len(clipsForManifest) > 0 {
+		if writeErr := manifest.Write(clipsForManifest, cfg, outDir); writeErr != nil && err == nil {
+			err = writeErr
+		}
 	}
 	return err
 }
