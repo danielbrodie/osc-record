@@ -14,9 +14,10 @@ import (
 	"github.com/danielbrodie/osc-record/internal/tui"
 )
 
-// ametadata output format: "lavfi.astats.Overall.RMS_level=-23.45" or "-inf"
+// Per-channel ametadata output: "lavfi.astats.1.RMS_level=-23.45", "lavfi.astats.2.RMS_level=-21.10"
 var (
-	rmsRe = regexp.MustCompile(`lavfi\.astats\.Overall\.RMS_level=(-[\d.]+|-inf|inf)`)
+	ch1Re = regexp.MustCompile(`lavfi\.astats\.1\.RMS_level=(-[\d.]+|-inf|inf)`)
+	ch2Re = regexp.MustCompile(`lavfi\.astats\.2\.RMS_level=(-[\d.]+|-inf|inf)`)
 )
 
 // Meter runs a background ffmpeg process reading audio levels from a device.
@@ -82,12 +83,23 @@ func (m *Meter) run(ctx context.Context, ffmpegPath string, inputArgs []string, 
 	}
 }
 
+func parseDB(s string) float64 {
+	if s == "inf" || s == "-inf" {
+		return -144
+	}
+	v, _ := strconv.ParseFloat(s, 64)
+	if v < -144 {
+		return -144
+	}
+	return v
+}
+
 func (m *Meter) probe(ctx context.Context, ffmpegPath string, inputArgs []string, send func(tui.AudioLevelMsg)) {
 	// Build the ffmpeg command: read device, run astats every 0.5s, output to null
 	// astats with metadata=1 emits per-channel RMS to stderr.
 	args := append(inputArgs,
-		"-vn",                  // no video decoding
-		"-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+		"-vn", // no video decoding
+		"-af", "astats=metadata=1:reset=1,ametadata=print:file=-",
 		"-f", "null", "-",
 	)
 
@@ -102,6 +114,8 @@ func (m *Meter) probe(ctx context.Context, ffmpegPath string, inputArgs []string
 	}
 
 	scanner := bufio.NewScanner(stdout)
+	var left, right float64 = -144, -144
+	hasLeft, hasRight := false, false
 
 	for scanner.Scan() {
 		select {
@@ -112,20 +126,18 @@ func (m *Meter) probe(ctx context.Context, ffmpegPath string, inputArgs []string
 		}
 
 		line := scanner.Text()
-		// ametadata output per frame: "lavfi.astats.Overall.RMS_level=-23.45"
-		if matches := rmsRe.FindStringSubmatch(line); len(matches) > 1 {
-			v := matches[1]
-			var db float64
-			if v == "inf" || v == "-inf" {
-				db = -144
-			} else {
-				db, _ = strconv.ParseFloat(v, 64)
-				if db < -144 {
-					db = -144
-				}
-			}
-			// Overall level sent to both channels (stereo split needs per-channel astats keys)
-			send(tui.AudioLevelMsg{Left: db, Right: db})
+
+		if m := ch1Re.FindStringSubmatch(line); len(m) > 1 {
+			left = parseDB(m[1])
+			hasLeft = true
+		} else if m := ch2Re.FindStringSubmatch(line); len(m) > 1 {
+			right = parseDB(m[1])
+			hasRight = true
+		}
+
+		if hasLeft && hasRight {
+			send(tui.AudioLevelMsg{Left: left, Right: right})
+			hasLeft, hasRight = false, false
 		}
 	}
 
