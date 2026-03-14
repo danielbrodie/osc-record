@@ -326,6 +326,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WizardCancelledMsg:
 		m.overlay = nil
 
+	case ScanCancelledMsg:
+		m.overlay = nil
+
+	case ScanCompleteMsg:
+		// Forward to overlay if open
+		if m.overlay != nil {
+			newOverlay, cmd := m.overlay.Update(msg)
+			m.overlay = newOverlay
+			return m, cmd
+		}
+
+	case ScanProgressMsg:
+		if m.overlay != nil {
+			newOverlay, cmd := m.overlay.Update(msg)
+			m.overlay = newOverlay
+			return m, cmd
+		}
+
 	case PreviewGrabbedMsg:
 		if msg.Err != nil {
 			m.addLog("Preview failed: " + msg.Err.Error())
@@ -387,7 +405,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.emitCommand(UserCmdGrabPreview)
 
 	case key.Matches(msg, m.keys.Scanner):
-		// TODO: launch scanner overlay
+		if m.recordState == StateIdle {
+			s := NewScannerOverlay(m.width, m.height)
+			m.overlay = s
+			m.emitCommand(UserCmdScan)
+			return s.Init()
+		}
 
 	case key.Matches(msg, m.keys.SlateName):
 		m.overlay = NewSlateOverlay(m.slate, m.slateCh)
@@ -397,6 +420,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		w := NewWizard(m.width, m.height, m.statusPanel.DiskPath, "recording")
 		m.overlay = w
 		return w.Init()
+
+	case key.Matches(msg, m.keys.ClipView):
+		// Open the most recent clip in the system viewer.
+		if len(m.clips) > 0 {
+			last := m.clips[len(m.clips)-1]
+			m.emitCommand(UserCmdViewClip)
+			m.addLog("Opening: " + last.File)
+			_ = last
+		}
+
+	case key.Matches(msg, m.keys.TakeReset):
+		// Reset take counter to 1.
+		m.emitCommand(UserCmdTakeReset)
+		m.addLog("Take reset to 1")
 	}
 	return nil
 }
@@ -469,11 +506,12 @@ func (m Model) viewMain() string {
 		"R", "Record",
 		"S", "Stop",
 		"N", "Slate",
+		"T", "Reset take",
+		"V", "View clip",
 		"P", "Preview",
 		"F1", "Scan",
 		"F2", "Checklist",
 		"W", "Setup",
-		"?", "Help",
 		"Q", "Quit",
 	)
 

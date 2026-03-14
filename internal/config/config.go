@@ -30,6 +30,7 @@ type DeviceConfig struct {
 	Name        string `toml:"name"`
 	Audio       string `toml:"audio"`
 	FormatCode  string `toml:"format_code"`
+	VideoInput  string `toml:"video_input"` // sdi, hdmi, component, composite, s_video, auto (default)
 }
 
 type RecordingConfig struct {

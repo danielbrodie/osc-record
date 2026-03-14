@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -31,6 +32,7 @@ import (
 	"github.com/danielbrodie/osc-record/internal/platform"
 	"github.com/danielbrodie/osc-record/internal/preview"
 	"github.com/danielbrodie/osc-record/internal/recorder"
+	"github.com/danielbrodie/osc-record/internal/scanner"
 	"github.com/danielbrodie/osc-record/internal/sigpoll"
 	"github.com/danielbrodie/osc-record/internal/tui"
 	"github.com/danielbrodie/osc-record/internal/verifier"
@@ -221,7 +223,7 @@ func promptForDevice(items []devices.Device, label string, singlePrompt bool) (d
 }
 
 func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
-	mode, _, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode)
+	mode, _, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode, cfg.Device.VideoInput)
 	if err != nil {
 		return err
 	}
@@ -351,7 +353,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	defer listener.Close()
 
 	poller := sigpoll.New(mode.Name())
-	poller.Start(deviceInfo.VideoDisplay, ffmpegPath, cfg.Device.FormatCode, func(msg tui.SignalStateMsg) {
+	poller.Start(deviceInfo.VideoDisplay, ffmpegPath, cfg.Device.FormatCode, cfg.Device.VideoInput, func(msg tui.SignalStateMsg) {
 		sendToUI(msg)
 	})
 	defer poller.Stop()
@@ -394,6 +396,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			recordingPath    string
 			recordingStarted time.Time
 			stopSizePoller   context.CancelFunc
+			completedClips   []string
 			currentSlate     = recorder.Slate{
 				Show:  cfg.Recording.Show,
 				Scene: cfg.Recording.Scene,
@@ -465,6 +468,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				sendToUI(msg)
 			})
 
+			completedClips = append(completedClips, exit.Filename)
 			recordingFile = ""
 			recordingPath = ""
 			recordingStarted = time.Time{}
@@ -495,6 +499,28 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 						path, err := preview.GrabFrame(ffmpegPath, inputArgs, deviceInfo.VideoDisplay)
 						poller.Resume()
 						sendToUI(tui.PreviewGrabbedMsg{Path: path, Err: err})
+					}()
+				case tui.UserCmdViewClip:
+					go func() {
+						if recordingPath != "" {
+							_ = openPath(recordingPath)
+						} else if len(completedClips) > 0 {
+							_ = openPath(filepath.Join(outDir, completedClips[len(completedClips)-1]))
+						}
+					}()
+				case tui.UserCmdTakeReset:
+					currentSlate.Take = "1"
+					cfg.Recording.Take = "1"
+				case tui.UserCmdScan:
+					go func() {
+						poller.Suspend()
+						scanCtx, cancelScan := context.WithCancel(runnerCtx)
+						_ = cancelScan
+						results := scanner.Run(scanCtx, ffmpegPath, deviceInfo.VideoDisplay, cfg.Device.VideoInput, func(msg tui.ScanProgressMsg) {
+							sendToUI(msg)
+						})
+						poller.Resume()
+						sendToUI(tui.ScanCompleteMsg{Results: results})
 					}()
 				}
 			case slate := <-slateCh:
@@ -656,7 +682,7 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 		return errors.New("Error: No stop trigger configured. Run 'osc-record capture stop' first.")
 	}
 
-	mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode)
+	mode, modeWarning, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode, cfg.Device.VideoInput)
 	if err != nil {
 		return err
 	}
@@ -781,4 +807,20 @@ func printRunSummary(cfg cfgpkg.Config, mode capture.CaptureMode, deviceName str
 	fmt.Printf("  Prefix:      %s\n", cfg.Recording.Prefix)
 	fmt.Printf("  Output:      %s\n", outputDir(cfg))
 	fmt.Printf("  Device:      %s\n", deviceName)
+}
+
+// openPath opens the given file path with the system default application.
+func openPath(path string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "linux":
+		cmd = exec.Command("xdg-open", path)
+	case "windows":
+		cmd = exec.Command("cmd", "/C", "start", "", path)
+	default:
+		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
+	return cmd.Start()
 }

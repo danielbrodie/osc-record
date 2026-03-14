@@ -4,6 +4,7 @@ import "os/exec"
 
 type DecklinkMode struct {
 	FormatCode string
+	VideoInput string // sdi, hdmi, component, composite, s_video — empty means auto
 }
 
 func (DecklinkMode) Name() string {
@@ -14,16 +15,20 @@ func (DecklinkMode) Summary() string {
 	return "decklink (auto-detect)"
 }
 
-func (m DecklinkMode) buildFormatArgs() []string {
-	if m.FormatCode != "" {
-		return []string{"-format_code", m.FormatCode}
+func (m DecklinkMode) buildInputModifiers() []string {
+	var args []string
+	if m.VideoInput != "" && m.VideoInput != "auto" {
+		args = append(args, "-video_input", m.VideoInput)
 	}
-	return nil
+	if m.FormatCode != "" {
+		args = append(args, "-format_code", m.FormatCode)
+	}
+	return args
 }
 
 func (m DecklinkMode) BuildInputArgs(videoDevice, audioDevice string) []string {
 	args := []string{"-f", "decklink"}
-	args = append(args, m.buildFormatArgs()...)
+	args = append(args, m.buildInputModifiers()...)
 	args = append(args, "-i", videoDevice)
 	return args
 }
@@ -34,7 +39,7 @@ func (DecklinkMode) NeedsAudio() bool {
 
 func (m DecklinkMode) SignalProbe(ffmpegPath, device string) error {
 	args := []string{"-f", "decklink"}
-	args = append(args, m.buildFormatArgs()...)
+	args = append(args, m.buildInputModifiers()...)
 	args = append(args, "-i", device, "-t", "2", "-f", "null", "-")
 	return exec.Command(ffmpegPath, args...).Run()
 }

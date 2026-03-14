@@ -33,7 +33,7 @@ func New(mode string) *Poller {
 	return &Poller{mode: mode}
 }
 
-func (p *Poller) Start(device, ffmpegPath, formatCode string, send func(tui.SignalStateMsg)) {
+func (p *Poller) Start(device, ffmpegPath, formatCode, videoInput string, send func(tui.SignalStateMsg)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -45,7 +45,7 @@ func (p *Poller) Start(device, ffmpegPath, formatCode string, send func(tui.Sign
 	p.triggerCh = make(chan struct{}, 1)
 
 	p.wg.Add(1)
-	go p.run(device, ffmpegPath, formatCode, send)
+	go p.run(device, ffmpegPath, formatCode, videoInput, send)
 }
 
 func (p *Poller) Stop() {
@@ -90,7 +90,7 @@ func (p *Poller) Resume() {
 	}
 }
 
-func (p *Poller) run(device, ffmpegPath, formatCode string, send func(tui.SignalStateMsg)) {
+func (p *Poller) run(device, ffmpegPath, formatCode, videoInput string, send func(tui.SignalStateMsg)) {
 	defer p.wg.Done()
 
 	if p.mode == capture.ModeAVFoundation || p.mode == capture.ModeDShow {
@@ -101,7 +101,7 @@ func (p *Poller) run(device, ffmpegPath, formatCode string, send func(tui.Signal
 		return
 	}
 
-	p.probe(device, ffmpegPath, formatCode, send)
+	p.probe(device, ffmpegPath, formatCode, videoInput, send)
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -114,12 +114,12 @@ func (p *Poller) run(device, ffmpegPath, formatCode string, send func(tui.Signal
 			if p.isSuspended() {
 				continue
 			}
-			p.probe(device, ffmpegPath, formatCode, send)
+			p.probe(device, ffmpegPath, formatCode, videoInput, send)
 		case <-ticker.C:
 			if p.isSuspended() {
 				continue
 			}
-			p.probe(device, ffmpegPath, formatCode, send)
+			p.probe(device, ffmpegPath, formatCode, videoInput, send)
 		}
 	}
 }
@@ -130,7 +130,7 @@ func (p *Poller) isSuspended() bool {
 	return p.suspended
 }
 
-func (p *Poller) probe(device, ffmpegPath, formatCode string, send func(tui.SignalStateMsg)) {
+func (p *Poller) probe(device, ffmpegPath, formatCode, videoInput string, send func(tui.SignalStateMsg)) {
 	p.probeMu.Lock()
 	defer p.probeMu.Unlock()
 	if send == nil {
@@ -141,6 +141,9 @@ func (p *Poller) probe(device, ffmpegPath, formatCode string, send func(tui.Sign
 	defer cancel()
 
 	args := []string{"-hide_banner", "-f", "decklink"}
+	if videoInput != "" && videoInput != "auto" {
+		args = append(args, "-video_input", videoInput)
+	}
 	if formatCode != "" {
 		args = append(args, "-format_code", formatCode)
 	}
@@ -153,9 +156,13 @@ func (p *Poller) probe(device, ffmpegPath, formatCode string, send func(tui.Sign
 	err := cmd.Run()
 
 	output := stderr.String()
+	inputLabel := "SDI"
+	if videoInput != "" && videoInput != "auto" && videoInput != "sdi" {
+		inputLabel = strings.ToUpper(videoInput)
+	}
 	msg := tui.SignalStateMsg{
 		Device:     device,
-		Input:      "SDI",
+		Input:      inputLabel,
 		Format:     formatCode,
 		Resolution: firstMatch(output, resolutionPattern),
 		FPS:        firstSubmatch(output, fpsPattern),

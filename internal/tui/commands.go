@@ -7,4 +7,7 @@ const (
 	UserCmdStop
 	UserCmdConfigChanged
 	UserCmdGrabPreview
+	UserCmdViewClip
+	UserCmdTakeReset
+	UserCmdScan
 )
