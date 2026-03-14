@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	minWidth  = 110
-	minHeight = 32
+	minWidth  = 80
+	minHeight = 24
 )
 
 // RecordingState tracks the current recording state machine.
@@ -465,6 +465,10 @@ func (m *Model) emitCommand(cmd UserCmd) {
 
 // View renders the full TUI screen.
 func (m Model) View() string {
+	// width=0 means WindowSizeMsg hasn't arrived yet — return empty to avoid flicker.
+	if m.width == 0 {
+		return ""
+	}
 	if m.width < minWidth || m.height < minHeight {
 		return m.viewResize()
 	}
