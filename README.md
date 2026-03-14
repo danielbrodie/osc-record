@@ -123,7 +123,7 @@ Common codes: `Hp59` (1080p59.94), `Hp29` (1080p29.97), `Hi59` (1080i59.94), `23
 
 ## Output Files
 
-Files are named `{prefix}-{YYYY-MM-DD-HHmmss}.{ext}` and saved to `output_dir`. With multi-device config, osc-record appends the device name to the prefix so one trigger produces one file per device.
+Files are named `{prefix}-{YYYY-MM-DD-HHmmss}.{ext}` and saved to `output_dir`. With multi-device config, osc-record appends each device's short name before the timestamp, so one trigger produces one file per device: `{prefix}-{shortName}-{YYYY-MM-DD-HHmmss}.{ext}`.
 
 ## Capture Modes
 
