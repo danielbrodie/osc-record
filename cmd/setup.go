@@ -98,7 +98,7 @@ Saves results to the config file. Use this for scripted or headless environments
 			return fmt.Errorf("failed to save config: %w", err)
 		}
 		fmt.Println(strings.Repeat("─", 40))
-		fmt.Println("Config saved. Run 'osc-record run --no-tui' to start.")
+		fmt.Println("Config saved. Run 'osc-record run' to start.")
 		return nil
 	},
 }

@@ -438,6 +438,24 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		sessionClips []health.ClipInfo
 	)
 
+	// pendingMsgs buffers messages sent before p.Run() starts.
+	// Once the program is running, all sends go directly to p.Send().
+	var (
+		uiReadyMu   sync.Mutex
+		uiReady     bool
+		pendingMsgs []tea.Msg
+	)
+	markUIReady := func() {
+		uiReadyMu.Lock()
+		pending := pendingMsgs
+		pendingMsgs = nil
+		uiReady = true
+		uiReadyMu.Unlock()
+		for _, m := range pending {
+			p.Send(m)
+		}
+	}
+
 	sendToUI := func(msg tea.Msg) {
 		statusMu.Lock()
 		switch msg := msg.(type) {
@@ -492,7 +510,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		}
 		statusMu.Unlock()
 
-		p.Send(msg)
+		uiReadyMu.Lock()
+		ready := uiReady
+		if !ready {
+			pendingMsgs = append(pendingMsgs, msg)
+		}
+		uiReadyMu.Unlock()
+		if ready {
+			p.Send(msg)
+		}
 	}
 
 	logWarning := func(text string) {
@@ -894,6 +920,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		}
 	}()
 
+	markUIReady()
 	_, err = p.Run()
 	cancelRunner()
 	<-runnerDone
