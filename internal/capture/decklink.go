@@ -1,6 +1,10 @@
 package capture
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+	"time"
+)
 
 type DecklinkMode struct {
 	FormatCode string
@@ -38,8 +42,10 @@ func (DecklinkMode) NeedsAudio() bool {
 }
 
 func (m DecklinkMode) SignalProbe(ffmpegPath, device string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
 	args := []string{"-f", "decklink"}
 	args = append(args, m.buildInputModifiers()...)
 	args = append(args, "-i", device, "-t", "2", "-f", "null", "-")
-	return exec.Command(ffmpegPath, args...).Run()
+	return exec.CommandContext(ctx, ffmpegPath, args...).Run()
 }

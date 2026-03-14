@@ -261,14 +261,23 @@ func primaryDevice(devices []resolvedDevice) resolvedDevice {
 }
 
 func startupProbeWarnings(ffmpegPath string, devices []resolvedDevice) []string {
+	// Always use goroutine+timeout regardless of device count to avoid hanging startup.
+	const probeTimeout = 5 * time.Second
 	if len(devices) <= 1 {
 		warnings := make([]string, 0, len(devices))
 		for _, device := range devices {
 			if device.Mode.Name() != capture.ModeDecklink {
 				continue
 			}
-			if err := device.Mode.SignalProbe(ffmpegPath, device.Selected.VideoDisplay); err != nil {
-				warnings = append(warnings, fmt.Sprintf("Warning: No valid signal detected on %q. Recording will fail until a signal is present.", device.Selected.VideoDisplay))
+			probeDone := make(chan error, 1)
+			go func() { probeDone <- device.Mode.SignalProbe(ffmpegPath, device.Selected.VideoDisplay) }()
+			select {
+			case err := <-probeDone:
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("Warning: No valid signal detected on %q. Recording will fail until a signal is present.", device.Selected.VideoDisplay))
+				}
+			case <-time.After(probeTimeout):
+				warnings = append(warnings, fmt.Sprintf("Warning: Signal probe timed out on %q. Check device connection.", device.Selected.VideoDisplay))
 			}
 		}
 		return warnings
