@@ -5,13 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	goosc "github.com/hypebeast/go-osc/osc"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -21,6 +25,7 @@ import (
 	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 	"github.com/danielbrodie/osc-record/internal/platform"
 	"github.com/danielbrodie/osc-record/internal/recorder"
+	"github.com/danielbrodie/osc-record/internal/tui"
 )
 
 func isTTY() bool {
@@ -208,11 +213,102 @@ func promptForDevice(items []devices.Device, label string, singlePrompt bool) (d
 }
 
 func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
-	// TUI entry point — launched when stdout is a TTY.
-	// TODO: full implementation in Phase 2+
-	// For now, fall through to plaintext with a notice.
-	fmt.Println("[TUI mode — not yet implemented, falling back to plaintext]")
-	return runPlaintext(cfg, ffmpegPath, cmd)
+	_ = ffmpegPath
+	_ = cmd
+
+	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, cfg.Device.Name)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	listener, err := listenTUICOSC(cfg.OSC.Port, func(message tuiOSCMessage) {
+		p.Send(tui.OSCReceivedMsg{
+			Address: message.Address,
+			Args:    renderArgs(message.Arguments),
+			Source:  message.Source,
+			Time:    time.Now(),
+		})
+	})
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	_, err = p.Run()
+	return err
+}
+
+type tuiOSCMessage struct {
+	Address   string
+	Arguments []interface{}
+	Source    string
+}
+
+type tuiOSCListener struct {
+	conn net.PacketConn
+	done chan struct{}
+}
+
+func listenTUICOSC(port int, handler func(tuiOSCMessage)) (*tuiOSCListener, error) {
+	conn, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return nil, err
+	}
+
+	listener := &tuiOSCListener{
+		conn: conn,
+		done: make(chan struct{}),
+	}
+
+	go listener.serve(handler)
+	return listener, nil
+}
+
+func (l *tuiOSCListener) serve(handler func(tuiOSCMessage)) {
+	defer close(l.done)
+
+	buf := make([]byte, 65535)
+	for {
+		n, addr, err := l.conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+
+		packet, err := goosc.ParsePacket(string(buf[:n]))
+		if err != nil {
+			continue
+		}
+
+		message, ok := packet.(*goosc.Message)
+		if !ok || handler == nil {
+			continue
+		}
+
+		handler(tuiOSCMessage{
+			Address:   message.Address,
+			Arguments: message.Arguments,
+			Source:    addr.String(),
+		})
+	}
+}
+
+func (l *tuiOSCListener) Close() error {
+	if l == nil || l.conn == nil {
+		return nil
+	}
+	err := l.conn.Close()
+	<-l.done
+	return err
+}
+
+func renderArgs(args []interface{}) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		parts = append(parts, fmt.Sprint(arg))
+	}
+	return strings.Join(parts, " ")
 }
 
 // runPlaintext is the v0.1 plaintext path, extracted so runTUI can call it as fallback.
