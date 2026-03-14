@@ -79,11 +79,13 @@ func resolveFFmpegPath(cfg cfgpkg.Config) (string, error) {
 		return "", fmt.Errorf("Error: ffmpeg not found at %s.", path)
 	}
 
-	path, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return "", errors.New("Error: ffmpeg not found on PATH. Install with 'brew install ffmpeg' or set ffmpeg.path in config.")
+	// Prefer plain ffmpeg, then fall back to ffmpeg-decklink (installed by osc-record's Homebrew formula).
+	for _, candidate := range []string{"ffmpeg", "ffmpeg-decklink"} {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
 	}
-	return path, nil
+	return "", errors.New("Error: ffmpeg not found on PATH. Install ffmpeg or run: brew tap danielbrodie/tap && brew install osc-record")
 }
 
 func outputDir(cfg cfgpkg.Config) string {
