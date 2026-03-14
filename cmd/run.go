@@ -490,8 +490,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					stopRecording()
 				case tui.UserCmdGrabPreview:
 					go func() {
+						poller.Suspend()
 						inputArgs := mode.BuildInputArgs(deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue)
 						path, err := preview.GrabFrame(ffmpegPath, inputArgs, deviceInfo.VideoDisplay)
+						poller.Resume()
 						sendToUI(tui.PreviewGrabbedMsg{Path: path, Err: err})
 					}()
 				}
