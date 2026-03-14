@@ -274,3 +274,51 @@ port = 8080
 ## License
 
 MIT
+
+---
+
+## Troubleshooting
+
+### Reinstall / upgrade
+
+To fully reinstall (e.g. after a version bump):
+
+```sh
+brew uninstall osc-record ffmpeg-decklink
+brew untap danielbrodie/tap
+brew tap danielbrodie/tap
+brew install osc-record
+```
+
+You must uninstall `ffmpeg-decklink` before `untap` — Homebrew refuses to remove a tap with installed formulae.
+
+### ffmpeg not found
+
+If you see `Error: ffmpeg not found on PATH`, osc-record looks for both `ffmpeg` and `ffmpeg-decklink` automatically. If neither is found:
+
+```sh
+brew tap danielbrodie/tap
+brew install ffmpeg-decklink
+```
+
+Or point to any existing ffmpeg in your config:
+
+```toml
+[ffmpeg]
+path = "/opt/homebrew/bin/ffmpeg"
+```
+
+### TUI doesn't launch / terminal too small
+
+osc-record requires a minimum terminal width of 110 columns. If your terminal is smaller, use:
+
+```sh
+osc-record run --no-tui
+```
+
+### Blackmagic device not detected
+
+- Ensure [Desktop Video](https://www.blackmagicdesign.com/support) drivers are installed
+- Try unplugging and replugging the device
+- Run `osc-record devices` to confirm detection
+- If using SDI and autodetect fails, set `format_code` in config (see Format Codes above)
