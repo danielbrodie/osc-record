@@ -34,6 +34,7 @@ import (
 	"github.com/danielbrodie/osc-record/internal/preview"
 	"github.com/danielbrodie/osc-record/internal/recorder"
 	"github.com/danielbrodie/osc-record/internal/scanner"
+	"github.com/danielbrodie/osc-record/internal/audiometer"
 	"github.com/danielbrodie/osc-record/internal/sigpoll"
 	"github.com/danielbrodie/osc-record/internal/tui"
 	"github.com/danielbrodie/osc-record/internal/verifier"
@@ -521,6 +522,19 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	})
 	defer poller.Stop()
 
+	// Audio meter — persistent ffmpeg process reading RMS levels during idle.
+	// Suspended when recording starts (device exclusivity), restarted after.
+	var aMeter audiometer.Meter
+	audioInputArgs := primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
+	startAudioMeter := func() {
+		aMeter.Start(ffmpegPath, audioInputArgs, func(msg tui.AudioLevelMsg) {
+			sendToUI(msg)
+		})
+	}
+	stopAudioMeter := func() { aMeter.Stop() }
+	startAudioMeter()
+	defer stopAudioMeter()
+
 	useMultiRecorder := len(resolvedDevices) > 1
 	multiDevices := toMultiRecorderDevices(resolvedDevices)
 
@@ -611,11 +625,11 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					return
 				}
 
-				poller.Suspend()
+				poller.Suspend(); stopAudioMeter()
 				startedAt := time.Now()
 				filenames, err := multiRecorder.Start(primary.Mode, cfg.Recording.Profile, cfg.Recording.Prefix, outDir, currentSlate, verbose)
 				if err != nil {
-					poller.Resume()
+					poller.Resume(); startAudioMeter()
 					sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
 					return
 				}
@@ -649,10 +663,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				return
 			}
 
-			poller.Suspend()
+			poller.Suspend(); stopAudioMeter()
 			filename, err := singleRecorder.Start(primary.Mode, cfg.Recording.Profile, primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue, cfg.Recording.Prefix, outDir, currentSlate, verbose)
 			if err != nil {
-				poller.Resume()
+				poller.Resume(); startAudioMeter()
 				sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
 				return
 			}
@@ -685,7 +699,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 
 				results := multiRecorder.Stop()
 				cancelAllMultiSizePollers()
-				poller.Resume()
+				poller.Resume(); startAudioMeter()
 				for _, device := range resolvedDevices {
 					var (
 						filename string
@@ -733,7 +747,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 
 			exit, err := singleRecorder.StopAndWait(context.Background())
 			cancelSizePoller()
-			poller.Resume()
+			poller.Resume(); startAudioMeter()
 			if err != nil {
 				sendToUI(tui.ErrorBannerMsg{Text: err.Error()})
 				return
@@ -784,10 +798,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					stopRecording()
 				case tui.UserCmdGrabPreview:
 					go func() {
-						poller.Suspend()
+						poller.Suspend(); stopAudioMeter()
 						inputArgs := primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
 						path, err := preview.GrabFrame(ffmpegPath, inputArgs, primary.Selected.VideoDisplay)
-						poller.Resume()
+						poller.Resume(); startAudioMeter()
 						sendToUI(tui.PreviewGrabbedMsg{Path: path, Err: err})
 					}()
 				case tui.UserCmdViewClip:
@@ -803,13 +817,13 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					cfg.Recording.Take = "1"
 				case tui.UserCmdScan:
 					go func() {
-						poller.Suspend()
+						poller.Suspend(); stopAudioMeter()
 						scanCtx, cancelScan := context.WithCancel(runnerCtx)
 						_ = cancelScan
 						results := scanner.Run(scanCtx, ffmpegPath, primary.Selected.VideoDisplay, primary.Config.VideoInput, func(msg tui.ScanProgressMsg) {
 							sendToUI(msg)
 						})
-						poller.Resume()
+						poller.Resume(); startAudioMeter()
 						sendToUI(tui.ScanCompleteMsg{Results: results})
 					}()
 				}
@@ -827,7 +841,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					continue
 				}
 				cancelSizePoller()
-				poller.Resume()
+				poller.Resume(); startAudioMeter()
 				recordingFile = ""
 				recordingPath = ""
 				recordingStarted = time.Time{}
@@ -849,7 +863,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					delete(recordingPaths, recording.Device.Name)
 				}
 				if ok && recording.Device.Name == primary.Selected.VideoDisplay {
-					poller.Resume()
+					poller.Resume(); startAudioMeter()
 				}
 				refreshCurrentViewPath()
 				deviceName := primary.Selected.VideoDisplay
