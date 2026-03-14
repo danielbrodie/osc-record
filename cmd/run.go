@@ -25,6 +25,7 @@ import (
 	oscpkg "github.com/danielbrodie/osc-record/internal/osc"
 	"github.com/danielbrodie/osc-record/internal/platform"
 	"github.com/danielbrodie/osc-record/internal/recorder"
+	"github.com/danielbrodie/osc-record/internal/sigpoll"
 	"github.com/danielbrodie/osc-record/internal/tui"
 )
 
@@ -213,10 +214,23 @@ func promptForDevice(items []devices.Device, label string, singlePrompt bool) (d
 }
 
 func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
-	_ = ffmpegPath
-	_ = cmd
+	mode, _, err := capture.ResolveMode(cfg.Device.CaptureMode, ffmpegPath, runtime.GOOS, cfg.Device.FormatCode)
+	if err != nil {
+		return err
+	}
 
-	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, cfg.Device.Name)
+	deviceInfo, updatedCfg, cfgChanged, err := ensureDevicesConfigured(ffmpegPath, mode, cfg, cmd.Flags().Changed("video-device"), cmd.Flags().Changed("audio-device"))
+	if err != nil {
+		return err
+	}
+	cfg = updatedCfg
+	if cfgChanged {
+		if err := saveConfig(cfg); err != nil {
+			return err
+		}
+	}
+
+	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, deviceInfo.VideoDisplay)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	listener, err := listenTUICOSC(cfg.OSC.Port, func(message tuiOSCMessage) {
@@ -231,6 +245,12 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		return err
 	}
 	defer listener.Close()
+
+	poller := sigpoll.New(mode.Name())
+	poller.Start(deviceInfo.VideoDisplay, ffmpegPath, cfg.Device.FormatCode, func(msg tui.SignalStateMsg) {
+		p.Send(msg)
+	})
+	defer poller.Stop()
 
 	_, err = p.Run()
 	return err
