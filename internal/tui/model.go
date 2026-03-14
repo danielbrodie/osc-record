@@ -59,6 +59,7 @@ type Model struct {
 	keys   KeyMap
 	width  int
 	height int
+	cmdCh  chan UserCmd
 
 	// Sub-models (panels)
 	oscPanel    OSCPanel
@@ -119,6 +120,7 @@ type Overlay interface {
 func New(recordAddr, stopAddr, deviceName string) Model {
 	m := Model{
 		keys:        DefaultKeyMap(),
+		cmdCh:       make(chan UserCmd, 8),
 		recordAddr:  recordAddr,
 		stopAddr:    stopAddr,
 		deviceName:  deviceName,
@@ -131,6 +133,10 @@ func New(recordAddr, stopAddr, deviceName string) Model {
 	m.clipsPanel = NewClipsPanel()
 	m.logPanel = NewLogPanel()
 	return m
+}
+
+func (m Model) Commands() <-chan UserCmd {
+	return m.cmdCh
 }
 
 // Init starts background ticks.
@@ -310,15 +316,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, m.keys.Record):
 		// Manual override — send a synthetic record trigger
-		// The caller (cmd/run.go) wires this to the recorder.
-		// Here we just update state optimistically.
 		if m.recordState == StateIdle {
 			m.recordState = StateStarting
+			m.emitCommand(UserCmdRecord)
 		}
 
 	case key.Matches(msg, m.keys.Stop):
 		if m.recordState == StateRecording {
 			m.recordState = StateStopping
+			m.emitCommand(UserCmdStop)
 		}
 
 	case key.Matches(msg, m.keys.Help):
@@ -334,6 +340,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		// TODO: launch wizard overlay
 	}
 	return nil
+}
+
+func (m *Model) emitCommand(cmd UserCmd) {
+	select {
+	case m.cmdCh <- cmd:
+	default:
+	}
 }
 
 // View renders the full TUI screen.

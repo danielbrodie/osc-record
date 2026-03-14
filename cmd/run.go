@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -230,8 +231,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		}
 	}
 
+	outDir := outputDir(cfg)
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("Error: Output directory %s does not exist and could not be created: %v.", outDir, err)
+	}
+
 	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, deviceInfo.VideoDisplay)
+	commandCh := model.Commands()
 	p := tea.NewProgram(model, tea.WithAltScreen())
+	oscCh := make(chan tuiOSCMessage, 32)
 
 	listener, err := listenTUICOSC(cfg.OSC.Port, func(message tuiOSCMessage) {
 		p.Send(tui.OSCReceivedMsg{
@@ -240,6 +248,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			Source:  message.Source,
 			Time:    time.Now(),
 		})
+		select {
+		case oscCh <- message:
+		default:
+		}
 	})
 	if err != nil {
 		return err
@@ -252,7 +264,127 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	})
 	defer poller.Stop()
 
+	rec := recorder.New(ffmpegPath, platform.Current())
+	runnerCtx, cancelRunner := context.WithCancel(context.Background())
+	defer cancelRunner()
+
+	runnerDone := make(chan struct{})
+	go func() {
+		defer close(runnerDone)
+
+		var (
+			recordingFile    string
+			recordingPath    string
+			recordingStarted time.Time
+			stopSizePoller   context.CancelFunc
+		)
+
+		cancelSizePoller := func() {
+			if stopSizePoller != nil {
+				stopSizePoller()
+				stopSizePoller = nil
+			}
+		}
+
+		startRecording := func() {
+			if rec.IsRecording() {
+				return
+			}
+
+			poller.Suspend()
+			filename, err := rec.Start(mode, cfg.Recording.Profile, deviceInfo.VideoConfigValue, deviceInfo.AudioConfigValue, cfg.Recording.Prefix, outDir, verbose)
+			if err != nil {
+				poller.Resume()
+				p.Send(tui.ErrorBannerMsg{Text: err.Error()})
+				return
+			}
+
+			recordingStarted = time.Now()
+			recordingFile = filename
+			recordingPath = filepath.Join(outDir, filename)
+			cancelSizePoller()
+			stopSizePoller = startFileSizePoller(runnerCtx, recordingFile, recordingPath, func(msg tui.FileSizeMsg) {
+				p.Send(msg)
+			})
+			p.Send(tui.RecordingStartedMsg{
+				File:   filename,
+				Device: deviceInfo.VideoDisplay,
+				Time:   recordingStarted,
+			})
+		}
+
+		stopRecording := func() {
+			if !rec.IsRecording() {
+				return
+			}
+
+			exit, err := rec.StopAndWait(context.Background())
+			cancelSizePoller()
+			poller.Resume()
+			if err != nil {
+				p.Send(tui.ErrorBannerMsg{Text: err.Error()})
+				return
+			}
+
+			sizeBytes := fileSize(recordingPath)
+			if exit.Path != "" {
+				sizeBytes = fileSize(exit.Path)
+			}
+
+			duration := time.Since(recordingStarted)
+			p.Send(tui.RecordingStoppedMsg{
+				File:      exit.Filename,
+				Device:    deviceInfo.VideoDisplay,
+				Duration:  duration,
+				SizeBytes: sizeBytes,
+			})
+
+			recordingFile = ""
+			recordingPath = ""
+			recordingStarted = time.Time{}
+		}
+
+		for {
+			select {
+			case <-runnerCtx.Done():
+				cancelSizePoller()
+				return
+			case message := <-oscCh:
+				switch {
+				case cfg.OSC.RecordAddress != "" && message.Address == cfg.OSC.RecordAddress:
+					startRecording()
+				case cfg.OSC.StopAddress != "" && message.Address == cfg.OSC.StopAddress:
+					stopRecording()
+				}
+			case cmd := <-commandCh:
+				switch cmd {
+				case tui.UserCmdRecord:
+					startRecording()
+				case tui.UserCmdStop:
+					stopRecording()
+				}
+			case exit := <-rec.UnexpectedExit():
+				cancelSizePoller()
+				poller.Resume()
+				recordingFile = ""
+				recordingPath = ""
+				recordingStarted = time.Time{}
+				p.Send(tui.RecordingCrashedMsg{
+					File:        exit.Filename,
+					Device:      deviceInfo.VideoDisplay,
+					Err:         fmt.Errorf("ffmpeg exited unexpectedly (code %d)", exit.Code),
+					Recoverable: false,
+				})
+			}
+		}
+	}()
+
 	_, err = p.Run()
+	cancelRunner()
+	<-runnerDone
+	if rec.IsRecording() {
+		_, _ = rec.StopAndWait(context.Background())
+	}
 	return err
 }
 
@@ -329,6 +461,38 @@ func renderArgs(args []interface{}) string {
 		parts = append(parts, fmt.Sprint(arg))
 	}
 	return strings.Join(parts, " ")
+}
+
+func startFileSizePoller(ctx context.Context, file, path string, send func(tui.FileSizeMsg)) context.CancelFunc {
+	pollCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-pollCtx.Done():
+				return
+			case <-ticker.C:
+				if send == nil {
+					continue
+				}
+				send(tui.FileSizeMsg{
+					File:      file,
+					SizeBytes: fileSize(path),
+				})
+			}
+		}
+	}()
+	return cancel
+}
+
+func fileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
 
 // runPlaintext is the v0.1 plaintext path, extracted so runTUI can call it as fallback.
