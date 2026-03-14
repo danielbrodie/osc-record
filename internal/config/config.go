@@ -65,8 +65,8 @@ func Defaults() Config {
 	return Config{
 		OSC: OSCConfig{
 			Port:          8000,
-			RecordAddress: "",
-			StopAddress:   "",
+			RecordAddress: "/start/record/",
+			StopAddress:   "/stop/record/",
 		},
 		Device: DeviceConfig{
 			CaptureMode: "auto",
