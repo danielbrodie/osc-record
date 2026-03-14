@@ -330,6 +330,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScanCancelledMsg:
 		m.overlay = nil
 
+	case HelpDismissMsg:
+		m.overlay = nil
+
+	case QuitConfirmedMsg:
+		m.overlay = nil
+		m.emitCommand(UserCmdStop)
+		return m, tea.Quit
+
+	case QuitCancelledMsg:
+		m.overlay = nil
+
 	case ScanCompleteMsg:
 		// Forward to overlay if open
 		if m.overlay != nil {
@@ -374,7 +385,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		if m.recordState == StateRecording {
-			// TODO: show quit confirmation overlay
+			fname := ""
+			if len(m.clips) > 0 {
+				fname = m.clips[len(m.clips)-1].File
+			}
+			m.overlay = NewQuitConfirm(fname)
+			return m.overlay.Init()
 		}
 		return tea.Quit
 
@@ -395,7 +411,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, m.keys.Help):
-		// TODO: help overlay
+		m.overlay = NewHelpOverlay()
+		return m.overlay.Init()
 
 	case key.Matches(msg, m.keys.Checklist):
 		m.overlay = NewChecklist(m.checklist)
