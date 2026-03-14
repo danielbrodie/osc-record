@@ -56,10 +56,7 @@ func (p ClipsPanel) View(width, height int) string {
 
 func (p ClipsPanel) verifyStatus(c ClipInfo) string {
 	if c.Verified == nil {
-		if c.Duration == 0 {
-			return styleWarning.Render("…")
-		}
-		return styleDim.Render("?")
+		return styleWarning.Render("…")
 	}
 	if *c.Verified {
 		return styleLocked.Render("✓")

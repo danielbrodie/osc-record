@@ -29,6 +29,7 @@ import (
 	"github.com/danielbrodie/osc-record/internal/recorder"
 	"github.com/danielbrodie/osc-record/internal/sigpoll"
 	"github.com/danielbrodie/osc-record/internal/tui"
+	"github.com/danielbrodie/osc-record/internal/verifier"
 )
 
 func isTTY() bool {
@@ -272,6 +273,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	defer diskMonitor.Stop()
 
 	rec := recorder.New(ffmpegPath, platform.Current())
+	clipVerifier := verifier.Verifier{}
 	runnerCtx, cancelRunner := context.WithCancel(context.Background())
 	defer cancelRunner()
 
@@ -344,6 +346,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				Device:    deviceInfo.VideoDisplay,
 				Duration:  duration,
 				SizeBytes: sizeBytes,
+			})
+			clipVerifier.Verify(exit.Path, duration, mode.Name() == capture.ModeDecklink, func(msg tui.ClipVerifiedMsg) {
+				msg.File = exit.Filename
+				p.Send(msg)
 			})
 
 			recordingFile = ""
