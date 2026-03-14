@@ -45,7 +45,7 @@ func (m *Meter) Start(ffmpegPath string, inputArgs []string, send func(tui.Audio
 	go m.run(ctx, ffmpegPath, inputArgs, send)
 }
 
-// Stop terminates the audio meter process and waits for it to exit.
+// Stop terminates the audio meter process and waits briefly for the process to exit.
 func (m *Meter) Stop() {
 	m.mu.Lock()
 	cancel := m.cancel
@@ -54,6 +54,10 @@ func (m *Meter) Stop() {
 
 	if cancel != nil {
 		cancel()
+		// Give the ffmpeg process a moment to actually release the device handle.
+		// decklink requires exclusive access; starting recording before the process
+		// exits causes "Cannot enable video input".
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 

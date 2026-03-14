@@ -236,10 +236,20 @@ func modeForDevice(defaultMode capture.CaptureMode, device DeviceInfo) capture.C
 	return defaultMode
 }
 
+// shortName produces a compact identifier from a device name.
+// "UltraStudio Recorder 3G" → "Recorder3G"
+// "UltraStudio 4K Mini"     → "4KMini"
+// "HD Pro Webcam C920"      → "C920"
 func shortName(name string) string {
-	parts := strings.Fields(name)
-	if len(parts) == 0 {
-		return ""
+	// Strip common Blackmagic prefixes
+	prefixes := []string{"UltraStudio ", "Blackmagic ", "HD Pro Webcam "}
+	n := name
+	for _, p := range prefixes {
+		if strings.HasPrefix(n, p) {
+			n = strings.TrimPrefix(n, p)
+			break
+		}
 	}
-	return parts[0]
+	// Remove spaces
+	return strings.ReplaceAll(n, " ", "")
 }

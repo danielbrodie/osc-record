@@ -231,3 +231,40 @@ func uniqueDevices(items []Device) []Device {
 	}
 	return unique
 }
+
+// BestAudioMatch finds the best audio device matching the given video device name.
+// It looks for an audio device whose name contains the video device name or a
+// significant word from it (case-insensitive). Returns error if no match found.
+func BestAudioMatch(audioDevices []Device, videoName string) (Device, error) {
+	videoLower := strings.ToLower(videoName)
+
+	// Exact substring match first
+	for _, d := range audioDevices {
+		if strings.Contains(strings.ToLower(d.Name), videoLower) ||
+			strings.Contains(videoLower, strings.ToLower(d.Name)) {
+			return d, nil
+		}
+	}
+
+	// Word-by-word match — find audio device sharing a meaningful word with video device
+	videoWords := strings.Fields(videoLower)
+	bestScore := 0
+	var best Device
+	for _, d := range audioDevices {
+		audioLower := strings.ToLower(d.Name)
+		score := 0
+		for _, w := range videoWords {
+			if len(w) > 2 && strings.Contains(audioLower, w) {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore = score
+			best = d
+		}
+	}
+	if bestScore > 0 {
+		return best, nil
+	}
+	return Device{}, fmt.Errorf("no audio device matched %q", videoName)
+}

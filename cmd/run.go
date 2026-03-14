@@ -182,14 +182,22 @@ func ensureDeviceConfigured(ffmpegPath string, mode capture.CaptureMode, deviceC
 
 	if mode.NeedsAudio() {
 		if deviceCfg.Audio == "" && !audioOverride {
-			audio, err := promptForDevice(group.Audio, "audio device", false)
-			if err != nil {
-				return selectedDevices{}, deviceCfg, false, err
+			// Try to auto-match audio device by video device name before prompting.
+			if matched, err := devices.BestAudioMatch(group.Audio, selected.VideoDisplay); err == nil {
+				deviceCfg.Audio = matched.ConfigValue()
+				selected.AudioDisplay = matched.Name
+				selected.AudioConfigValue = matched.ConfigValue()
+				changed = true
+			} else {
+				audio, err := promptForDevice(group.Audio, "audio device", false)
+				if err != nil {
+					return selectedDevices{}, deviceCfg, false, err
+				}
+				deviceCfg.Audio = audio.ConfigValue()
+				selected.AudioDisplay = audio.Name
+				selected.AudioConfigValue = audio.ConfigValue()
+				changed = true
 			}
-			deviceCfg.Audio = audio.ConfigValue()
-			selected.AudioDisplay = audio.Name
-			selected.AudioConfigValue = audio.ConfigValue()
-			changed = true
 		} else {
 			audio, err := devices.MatchDevice(group.Audio, deviceCfg.Audio)
 			if err != nil {
@@ -523,7 +531,9 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	defer poller.Stop()
 
 	// Audio meter — persistent ffmpeg process reading RMS levels during idle.
-	// Suspended when recording starts (device exclusivity), restarted after.
+	// Only runs on decklink devices (avfoundation has no exclusive lock issue, but
+	// the audio meter still needs the device so we keep the same suspend/resume pattern).
+	// Start is delayed until after the initial signal probe completes (~3s).
 	var aMeter audiometer.Meter
 	audioInputArgs := primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
 	startAudioMeter := func() {
@@ -532,7 +542,11 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		})
 	}
 	stopAudioMeter := func() { aMeter.Stop() }
-	startAudioMeter()
+	go func() {
+		// Wait for the initial probe to finish before opening the device for metering.
+		time.Sleep(4 * time.Second)
+		startAudioMeter()
+	}()
 	defer stopAudioMeter()
 
 	useMultiRecorder := len(resolvedDevices) > 1
