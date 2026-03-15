@@ -33,8 +33,8 @@ Saves results to the config file. Use this for scripted or headless environments
 
 		// Step 1: OSC record address
 		fmt.Printf("Current record address: %q\n", cfg.OSC.RecordAddress)
-		fmt.Print("Send your RECORD cue now (or Enter to keep current)... ")
-		addr, err := listenForOSC(cfg.OSC.Port, 15*time.Second)
+		fmt.Printf("Listening on port %d for 60 seconds — send your RECORD cue now (or press Enter to keep current)...\n", cfg.OSC.Port)
+		addr, err := listenForOSC(cfg.OSC.Port, 60*time.Second)
 		if err != nil {
 			if isPortInUse(err) {
 				fmt.Printf("\nError: %s\n", err)
@@ -58,8 +58,8 @@ Saves results to the config file. Use this for scripted or headless environments
 
 		// Step 2: OSC stop address
 		fmt.Printf("Current stop address: %q\n", cfg.OSC.StopAddress)
-		fmt.Print("Send your STOP cue now (or Enter to keep current)... ")
-		addr, err = listenForOSC(cfg.OSC.Port, 15*time.Second)
+		fmt.Printf("Listening on port %d for 60 seconds — send your STOP cue now (or press Enter to keep current)...\n", cfg.OSC.Port)
+		addr, err = listenForOSC(cfg.OSC.Port, 60*time.Second)
 		if err != nil {
 			if isPortInUse(err) {
 				fmt.Printf("\nError: %s\n", err)
@@ -138,16 +138,18 @@ func listenForOSC(port int, timeout time.Duration) (string, error) {
 
 	buf := make([]byte, 4096)
 	for {
-		n, _, err := conn.ReadFrom(buf)
+		n, src, err := conn.ReadFrom(buf)
 		if err != nil {
 			return "", err
 		}
 		// Minimal OSC address parse: OSC packets start with '/'
 		pkt, err := osc.ParsePacket(string(buf[:n]))
 		if err != nil {
+			fmt.Printf("  (received non-OSC packet from %s, ignoring)\n", src)
 			continue
 		}
 		if msg, ok := pkt.(*osc.Message); ok && strings.HasPrefix(msg.Address, "/") {
+			fmt.Printf("  → received: %s (from %s)\n", msg.Address, src)
 			return msg.Address, nil
 		}
 	}
