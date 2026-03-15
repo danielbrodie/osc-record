@@ -53,16 +53,32 @@ Saves results to the config file. Use this for scripted or headless environments
 			fmt.Println("Skipped — no stop address set.\n")
 		}
 
-		// Step 3: Output directory
-		fmt.Printf("Output directory [%s]: ", cfg.Recording.OutputDir)
+		// Step 3: Video input
+		fmt.Printf("Video input [1=HDMI / 2=SDI / 3=Auto-detect (default)]: ")
 		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		switch line {
+		case "1", "hdmi", "HDMI":
+			cfg.Device.VideoInput = "hdmi"
+			fmt.Printf("✓ Video input: HDMI\n\n")
+		case "2", "sdi", "SDI":
+			cfg.Device.VideoInput = "sdi"
+			fmt.Printf("✓ Video input: SDI\n\n")
+		default:
+			cfg.Device.VideoInput = ""
+			fmt.Printf("✓ Video input: Auto-detect (on next run)\n\n")
+		}
+
+		// Step 4: Output directory
+		fmt.Printf("Output directory [%s]: ", cfg.Recording.OutputDir)
+		line, _ = reader.ReadString('\n')
 		line = strings.TrimSpace(line)
 		if line != "" {
 			cfg.Recording.OutputDir = line
 		}
 		fmt.Printf("✓ Output: %s\n\n", cfg.Recording.OutputDir)
 
-		// Step 4: Prefix
+		// Step 5: Prefix
 		fmt.Printf("Filename prefix [%s]: ", cfg.Recording.Prefix)
 		line, _ = reader.ReadString('\n')
 		line = strings.TrimSpace(line)

@@ -337,9 +337,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.deviceName = msg.Result.DeviceName
 		m.oscPanel.recordAddr = msg.Result.RecordAddress
 		m.oscPanel.stopAddr = msg.Result.StopAddress
-		m.addLog("Setup saved: device=" + msg.Result.DeviceName +
+		logParts := "Setup saved: device=" + msg.Result.DeviceName +
 			" record=" + msg.Result.RecordAddress +
-			" stop=" + msg.Result.StopAddress)
+			" stop=" + msg.Result.StopAddress
+		if msg.Result.VideoInput != "" {
+			logParts += " input=" + msg.Result.VideoInput
+		}
+		m.addLog(logParts)
 		// Signal the runner to reload config (via UserCmd channel)
 		m.emitCommand(UserCmdConfigChanged)
 

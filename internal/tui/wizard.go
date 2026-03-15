@@ -16,6 +16,7 @@ type WizardStep int
 
 const (
 	WizardStepDevice WizardStep = iota
+	WizardStepVideoInput
 	WizardStepOSCRecord
 	WizardStepOSCStop
 	WizardStepOutput
@@ -25,6 +26,7 @@ const (
 // WizardResult is the config saved when the wizard completes.
 type WizardResult struct {
 	DeviceName    string
+	VideoInput    string // "hdmi", "sdi", or "" (auto-detect)
 	RecordAddress string
 	StopAddress   string
 	OutputDir     string
@@ -48,6 +50,10 @@ type Wizard struct {
 	audioDevices []devices.Device
 	selectedDevice int
 	deviceErr    string
+
+	// Step 2: video input
+	selectedInput int // 0=HDMI, 1=SDI, 2=Auto-detect
+	videoInput    string
 
 	// Step 2-3: OSC
 	lastOSCAddr  string   // most recent OSC address seen while listening
@@ -173,10 +179,16 @@ func (w Wizard) handleKey(msg tea.KeyMsg) (Overlay, tea.Cmd) {
 		if w.step == WizardStepDevice && w.selectedDevice > 0 {
 			w.selectedDevice--
 		}
+		if w.step == WizardStepVideoInput && w.selectedInput > 0 {
+			w.selectedInput--
+		}
 
 	case "down", "j":
 		if w.step == WizardStepDevice && w.selectedDevice < len(w.videoDevices)-1 {
 			w.selectedDevice++
+		}
+		if w.step == WizardStepVideoInput && w.selectedInput < 2 {
+			w.selectedInput++
 		}
 
 	case "tab":
@@ -203,6 +215,19 @@ func (w Wizard) advance() (Overlay, tea.Cmd) {
 		if len(w.videoDevices) == 0 {
 			w.deviceErr = "No devices found — check capture setup"
 			return w, nil
+		}
+		w.step = WizardStepVideoInput
+		w.selectedInput = 2 // default to Auto-detect
+		return w, nil
+
+	case WizardStepVideoInput:
+		switch w.selectedInput {
+		case 0:
+			w.videoInput = "hdmi"
+		case 1:
+			w.videoInput = "sdi"
+		default:
+			w.videoInput = "" // auto-detect
 		}
 		w.step = WizardStepOSCRecord
 		w.lastOSCAddr = ""
@@ -238,6 +263,7 @@ func (w Wizard) advance() (Overlay, tea.Cmd) {
 		}
 		result := WizardResult{
 			DeviceName:    deviceName,
+			VideoInput:    w.videoInput,
 			RecordAddress: w.recordAddr,
 			StopAddress:   w.stopAddr,
 			OutputDir:     w.outputInput.Value(),
@@ -252,7 +278,7 @@ func (w Wizard) View() string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("SETUP WIZARD") + "\n")
 
-	steps := []string{"Device", "Record cue", "Stop cue", "Output"}
+	steps := []string{"Device", "Input", "Record cue", "Stop cue", "Output"}
 	stepLine := ""
 	for i, s := range steps {
 		st := WizardStep(i)
@@ -281,6 +307,18 @@ func (w Wizard) View() string {
 				}
 				b.WriteString(prefix + styleText.Render(d.Name) + "\n")
 			}
+		}
+		b.WriteString("\n" + styleDim.Render("[↑↓] select  [Enter] confirm  [Esc] cancel"))
+
+	case WizardStepVideoInput:
+		b.WriteString(styleText.Render("What input is your camera connected to?") + "\n\n")
+		inputLabels := []string{"HDMI", "SDI", "Auto-detect"}
+		for i, label := range inputLabels {
+			prefix := "  "
+			if i == w.selectedInput {
+				prefix = styleWarning.Render("▶ ")
+			}
+			b.WriteString(prefix + styleText.Render(label) + "\n")
 		}
 		b.WriteString("\n" + styleDim.Render("[↑↓] select  [Enter] confirm  [Esc] cancel"))
 

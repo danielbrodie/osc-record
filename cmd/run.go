@@ -1225,6 +1225,59 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 		fmt.Println(warning)
 	}
 
+	primary := primaryDevice(resolvedDevices)
+
+	// Plaintext auto-detect: blocking probe + numbered prompt for disambiguation.
+	if needsAutoDetect(cfg, primary) {
+		fmt.Println("Probing video inputs...")
+
+		detectCtx, cancelDetect := context.WithTimeout(context.Background(), 90*time.Second)
+		result, detectErr := scanner.AutoDetect(detectCtx, ffmpegPath, primary.Selected.VideoDisplay, func(msg tui.AutoDetectProgressMsg) {
+			fmt.Printf("  %s\n", msg.Detail)
+		})
+		cancelDetect()
+
+		if detectErr != nil {
+			fmt.Printf("Auto-detect failed: %v\n", detectErr)
+		} else if result.BothLocked {
+			// Disambiguation prompt.
+			fmt.Println("\nBoth HDMI and SDI have a live signal.")
+			fmt.Println("  1. HDMI")
+			fmt.Println("  2. SDI")
+			fmt.Printf("Choose [1]: ")
+			reader := bufio.NewReader(os.Stdin)
+			line, _ := reader.ReadString('\n')
+			line = strings.TrimSpace(line)
+
+			chosenInput := "hdmi"
+			if line == "2" || strings.EqualFold(line, "sdi") {
+				chosenInput = "sdi"
+			}
+
+			result, detectErr = scanner.AutoDetectFormat(detectCtx, ffmpegPath, primary.Selected.VideoDisplay, chosenInput, func(msg tui.AutoDetectProgressMsg) {
+				fmt.Printf("  %s\n", msg.Detail)
+			})
+			if detectErr != nil {
+				fmt.Printf("Format scan failed: %v\n", detectErr)
+			}
+		}
+
+		if detectErr == nil && result != nil && result.VideoInput != "" {
+			fmt.Printf("✓ Auto-detected: %s %s (%s)\n\n", result.VideoInput, result.FormatDesc, result.FormatCode)
+
+			devices := cfg.ActiveDevices()
+			devices[0].VideoInput = result.VideoInput
+			devices[0].FormatCode = result.FormatCode
+			cfg.SetDevices(devices, cfg.UsesDevicesArray())
+			primary.Config = devices[0]
+			if saveErr := saveConfig(cfg); saveErr != nil {
+				fmt.Printf("Warning: failed to save config: %v\n", saveErr)
+			} else {
+				fmt.Println("Config saved.")
+			}
+		}
+	}
+
 	outDir := outputDir(cfg)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("Error: Output directory %s does not exist and could not be created: %v.", outDir, err)
@@ -1242,7 +1295,6 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 	}
 	defer listener.Close()
 
-	primary := primaryDevice(resolvedDevices)
 	useMultiRecorder := len(resolvedDevices) > 1
 	multiDevices := toMultiRecorderDevices(resolvedDevices)
 	singleRecorder := recorder.New(ffmpegPath, platform.Current())
