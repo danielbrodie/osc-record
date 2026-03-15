@@ -453,7 +453,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.banner = ""
 
 	case key.Matches(msg, m.keys.Record):
-		// Manual override — send a synthetic record trigger
+		// Manual override — send a synthetic record trigger.
+		// During auto-detect, the command still goes through but the runner
+		// will cancel detection and wait for the device before starting.
 		if m.recordState == StateIdle {
 			m.recordState = StateStarting
 			m.emitCommand(UserCmdRecord)
@@ -474,8 +476,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.overlay.Init()
 
 	case key.Matches(msg, m.keys.Preview):
-		m.addLog("Grabbing preview frame...")
-		m.emitCommand(UserCmdGrabPreview)
+		if m.autoDetecting {
+			m.addLog("Preview unavailable during auto-detect")
+		} else {
+			m.addLog("Grabbing preview frame...")
+			m.emitCommand(UserCmdGrabPreview)
+		}
 
 	case key.Matches(msg, m.keys.Scanner):
 		if m.recordState == StateIdle && !m.autoDetecting {

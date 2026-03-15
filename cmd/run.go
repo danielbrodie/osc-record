@@ -608,6 +608,13 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	// Register hooks so the poller stops the meter before probing and restarts it after.
 	poller.SetProbeHooks(stopAudioMeter, startAudioMeter)
 
+	// detectDoneCh is closed when the auto-detect goroutine finishes (success,
+	// failure, or cancellation). The runner goroutine waits on this before
+	// starting recording or grabbing a preview so it never contends for the
+	// DeckLink device while detection is in progress.
+	detectDoneCh := make(chan struct{})
+	var cancelDetectFn context.CancelFunc // set if auto-detect is running
+
 	runAutoDetect := needsAutoDetect(cfg, primary)
 	if runAutoDetect {
 		// Signal the TUI that we're probing.
@@ -616,12 +623,15 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 
 	if runAutoDetect {
 		go func() {
+			defer close(detectDoneCh)
+
 			// Suspend poller and ensure audio meter is stopped during detection.
 			poller.Suspend()
 			stopAudioMeter()
 
 			detectCtx, cancelDetect := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancelDetect()
+			cancelDetectFn = cancelDetect
 
 			result, err := scanner.AutoDetect(detectCtx, ffmpegPath, primary.Selected.VideoDisplay, func(msg tui.AutoDetectProgressMsg) {
 				sendToUI(msg)
@@ -640,8 +650,18 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			if result.BothLocked {
 				sendToUI(tui.AutoDetectCompleteMsg{BothLocked: true})
 
-				// Wait for user to pick an input via the overlay.
-				chosenInput := <-inputChoiceCh
+				// Wait for user to pick an input, or for cancellation (e.g.
+				// record trigger called waitForDetect → cancelDetectFn).
+				var chosenInput string
+				select {
+				case chosenInput = <-inputChoiceCh:
+				case <-detectCtx.Done():
+					sendToUI(tui.LogMsg{Time: time.Now(), Text: "Auto-detect cancelled (record triggered)"})
+					sendToUI(tui.SignalStateMsg{Device: primary.Selected.VideoDisplay, Probing: false})
+					poller.Resume()
+					startAudioMeter()
+					return
+				}
 				if chosenInput == "" {
 					// User pressed Esc — abort auto-detect.
 					sendToUI(tui.LogMsg{Time: time.Now(), Text: "Auto-detect cancelled"})
@@ -706,11 +726,23 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			startAudioMeter()
 		}()
 	} else {
-		// No auto-detect — start audio meter on the normal 4s delay.
+		// No auto-detect — mark detection as done immediately.
+		close(detectDoneCh)
+		// Start audio meter on the normal 4s delay.
 		go func() {
 			time.Sleep(4 * time.Second)
 			startAudioMeter()
 		}()
+	}
+
+	// waitForDetect cancels any running auto-detect and blocks until the
+	// goroutine has released the device. Safe to call when detect is already
+	// done (detectDoneCh is already closed).
+	waitForDetect := func() {
+		if cancelDetectFn != nil {
+			cancelDetectFn()
+		}
+		<-detectDoneCh
 	}
 
 	useMultiRecorder := len(resolvedDevices) > 1
@@ -798,6 +830,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		}
 
 		startRecording := func() {
+			// If auto-detect is still running, cancel it and wait for the
+			// device to be released before we try to open it for recording.
+			waitForDetect()
+
 			if useMultiRecorder {
 				if multiRecorder.IsRecording() {
 					return
@@ -978,6 +1014,7 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 					stopRecording()
 				case tui.UserCmdGrabPreview:
 					go func() {
+						waitForDetect()
 						poller.Suspend(); stopAudioMeter()
 						inputArgs := primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
 						path, err := preview.GrabFrame(ffmpegPath, inputArgs, primary.Selected.VideoDisplay)
