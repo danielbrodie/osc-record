@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/hypebeast/go-osc/osc"
 	"github.com/spf13/cobra"
-
 	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
 )
 
@@ -116,13 +116,20 @@ func isPortInUse(err error) bool {
 
 func listenForOSC(port int, timeout time.Duration) (string, error) {
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	conn, err := net.ListenPacket("udp", addr)
+
+	// Use SO_REUSEPORT so the wizard can co-exist with Protokol or other OSC monitors.
+	lc := reusePortListenConfig()
+	pc, err := lc.ListenPacket(context.Background(), "udp", addr)
+	if err != nil {
+		pc, err = net.ListenPacket("udp", addr)
+	}
 	if err != nil {
 		if isPortInUse(err) {
 			return "", fmt.Errorf("port %d is already in use — stop osc-record run before running setup", port)
 		}
 		return "", err
 	}
+	conn := pc
 	defer conn.Close()
 
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {

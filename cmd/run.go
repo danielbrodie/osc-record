@@ -973,7 +973,12 @@ type tuiOSCListener struct {
 }
 
 func listenTUICOSC(port int, handler func(tuiOSCMessage)) (*tuiOSCListener, error) {
-	conn, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
+	addr := fmt.Sprintf(":%d", port)
+	lc := reusePortListenConfig()
+	conn, err := lc.ListenPacket(context.Background(), "udp", addr)
+	if err != nil {
+		conn, err = net.ListenPacket("udp", addr)
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "address already in use") {
 			return nil, fmt.Errorf("Error: Could not bind to port %d: address already in use.\nKill any existing osc-record process (pkill -f osc-record) or use --port to specify a different port.", port)
