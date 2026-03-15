@@ -11,6 +11,7 @@ type SignalStateMsg struct {
 	FPS        string // e.g. "59.94"
 	Locked     bool
 	ColorBars  bool   // true when card locked but no live source (outputting color bars)
+	Probing    bool   // true during auto-detection — signal panel shows "⟳ probing..."
 	Err        string // non-empty if probe errored
 }
 

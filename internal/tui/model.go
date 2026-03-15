@@ -56,11 +56,12 @@ type ClipInfo struct {
 
 // Model is the root bubbletea model for the TUI.
 type Model struct {
-	keys    KeyMap
-	width   int
-	height  int
-	cmdCh   chan UserCmd
-	slateCh chan Slate
+	keys          KeyMap
+	width         int
+	height        int
+	cmdCh         chan UserCmd
+	slateCh       chan Slate
+	inputChoiceCh chan string // receives chosen video input from InputChoiceOverlay
 
 	// Sub-models (panels)
 	oscPanel    OSCPanel
@@ -96,6 +97,9 @@ type Model struct {
 
 	// Error banner
 	banner string
+
+	// Auto-detection state
+	autoDetecting bool
 
 	// Blink state (500ms tick)
 	blink bool
@@ -147,6 +151,16 @@ func (m Model) SlateChanges() <-chan Slate {
 
 func (m *Model) SetChecklistConfig(cfg ChecklistConfig) {
 	m.checklist = cfg
+}
+
+func (m *Model) SetAutoDetecting(v bool) {
+	m.autoDetecting = v
+}
+
+// SetInputChoiceCh sets the channel used to forward the user's input selection
+// from the InputChoiceOverlay back to the auto-detect goroutine.
+func (m *Model) SetInputChoiceCh(ch chan string) {
+	m.inputChoiceCh = ch
 }
 
 func (m *Model) SetSlate(slate Slate) {
@@ -361,6 +375,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+	case AutoDetectProgressMsg:
+		m.autoDetecting = true
+		m.addLog("⟳ " + msg.Detail)
+		// Keep signal panel in probing state.
+		m.signalPanel.probing = true
+
+	case AutoDetectCompleteMsg:
+		m.autoDetecting = false
+		m.signalPanel.probing = false
+		if msg.Err != nil {
+			m.addLog("✗ Auto-detect: " + msg.Err.Error())
+		} else if msg.BothLocked {
+			// Open disambiguation overlay.
+			m.overlay = NewInputChoiceOverlay()
+			m.addLog("⟳ Both HDMI and SDI have signal — choose input")
+		} else {
+			m.addLog(fmt.Sprintf("✓ Auto-detected: %s %s (%s)", msg.VideoInput, msg.FormatDesc, msg.FormatCode))
+		}
+
+	case InputChosenMsg:
+		m.overlay = nil
+		m.addLog("✓ Input selected: " + msg.VideoInput)
+		if m.inputChoiceCh != nil {
+			select {
+			case m.inputChoiceCh <- msg.VideoInput:
+			default:
+			}
+		}
+
+	case ConfigUpdatedMsg:
+		m.statusPanel.SetDeviceConfig(m.deviceName, "", msg.FormatCode)
+
 	case PreviewGrabbedMsg:
 		if msg.Err != nil {
 			m.addLog("Preview failed: " + msg.Err.Error())
@@ -428,7 +474,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.emitCommand(UserCmdGrabPreview)
 
 	case key.Matches(msg, m.keys.Scanner):
-		if m.recordState == StateIdle {
+		if m.recordState == StateIdle && !m.autoDetecting {
 			s := NewScannerOverlay(m.width, m.height)
 			m.overlay = s
 			m.emitCommand(UserCmdScan)

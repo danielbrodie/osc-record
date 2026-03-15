@@ -260,6 +260,22 @@ func primaryDevice(devices []resolvedDevice) resolvedDevice {
 	return devices[0]
 }
 
+// needsAutoDetect returns true if the primary device is decklink, the config
+// is single-device, and either video_input or format_code is missing/auto.
+func needsAutoDetect(cfg cfgpkg.Config, primary resolvedDevice) bool {
+	if primary.Mode.Name() != capture.ModeDecklink {
+		return false
+	}
+	if cfg.HasMultipleDevices() {
+		return false
+	}
+	vi := primary.Config.VideoInput
+	fc := primary.Config.FormatCode
+	inputMissing := vi == "" || vi == "auto"
+	formatMissing := fc == ""
+	return inputMissing || formatMissing
+}
+
 func startupProbeWarnings(ffmpegPath string, devices []resolvedDevice) []string {
 	// Always use goroutine+timeout regardless of device count to avoid hanging startup.
 	const probeTimeout = 5 * time.Second
@@ -439,6 +455,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	})
 	commandCh := model.Commands()
 	slateCh := model.SlateChanges()
+
+	// Channel for InputChoiceOverlay to forward user selection to auto-detect goroutine.
+	inputChoiceCh := make(chan string, 1)
+	model.SetInputChoiceCh(inputChoiceCh)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	oscCh := make(chan tuiOSCMessage, 32)
 	clipVerifier := verifier.Verifier{}
@@ -578,16 +598,101 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 		})
 	}
 	stopAudioMeter := func() { aMeter.Stop() }
-	go func() {
-		// Wait for the initial probe to finish before opening the device for metering.
-		time.Sleep(4 * time.Second)
-		startAudioMeter()
-	}()
 	defer stopAudioMeter()
 
 	// The signal poller and audio meter both need exclusive device access.
 	// Register hooks so the poller stops the meter before probing and restarts it after.
 	poller.SetProbeHooks(stopAudioMeter, startAudioMeter)
+
+	runAutoDetect := needsAutoDetect(cfg, primary)
+	if runAutoDetect {
+		// Signal the TUI that we're probing.
+		sendToUI(tui.SignalStateMsg{Device: primary.Selected.VideoDisplay, Probing: true})
+
+		if cfg.HasMultipleDevices() {
+			sendToUI(tui.LogMsg{Time: time.Now(), Text: "⚠ Auto-detect skipped: multi-device config"})
+			runAutoDetect = false
+		}
+	}
+
+	if runAutoDetect {
+		go func() {
+			// Suspend poller and ensure audio meter is stopped during detection.
+			poller.Suspend()
+			stopAudioMeter()
+
+			detectCtx, cancelDetect := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancelDetect()
+
+			result, err := scanner.AutoDetect(detectCtx, ffmpegPath, primary.Selected.VideoDisplay, func(msg tui.AutoDetectProgressMsg) {
+				sendToUI(msg)
+			})
+
+			if err != nil {
+				sendToUI(tui.AutoDetectCompleteMsg{Err: err})
+				// Clear probing state and resume normal operation.
+				sendToUI(tui.SignalStateMsg{Device: primary.Selected.VideoDisplay, Probing: false})
+				poller.Resume()
+				startAudioMeter()
+				return
+			}
+
+			// If both inputs locked, ask user to disambiguate.
+			if result.BothLocked {
+				sendToUI(tui.AutoDetectCompleteMsg{BothLocked: true})
+
+				// Wait for user to pick an input via the overlay.
+				chosenInput := <-inputChoiceCh
+
+				// Now scan format codes for the chosen input.
+				result, err = scanner.AutoDetectFormat(detectCtx, ffmpegPath, primary.Selected.VideoDisplay, chosenInput, func(msg tui.AutoDetectProgressMsg) {
+					sendToUI(msg)
+				})
+				if err != nil {
+					sendToUI(tui.AutoDetectCompleteMsg{Err: err})
+					sendToUI(tui.SignalStateMsg{Device: primary.Selected.VideoDisplay, Probing: false})
+					poller.Resume()
+					startAudioMeter()
+					return
+				}
+			}
+
+			// Update config with discovered values.
+			devices := cfg.ActiveDevices()
+			devices[0].VideoInput = result.VideoInput
+			devices[0].FormatCode = result.FormatCode
+			cfg.SetDevices(devices, cfg.UsesDevicesArray())
+			primary.Config = devices[0]
+			if saveErr := saveConfig(cfg); saveErr != nil {
+				sendToUI(tui.ErrorBannerMsg{Text: "Auto-detect: failed to save config: " + saveErr.Error()})
+			}
+
+			sendToUI(tui.AutoDetectCompleteMsg{
+				VideoInput: result.VideoInput,
+				FormatCode: result.FormatCode,
+				FormatDesc: result.FormatDesc,
+			})
+			sendToUI(tui.ConfigUpdatedMsg{
+				VideoInput: result.VideoInput,
+				FormatCode: result.FormatCode,
+			})
+
+			// Restart poller with discovered values.
+			poller.Stop()
+			poller = sigpoll.New(primary.Mode.Name())
+			poller.Start(primary.Selected.VideoDisplay, ffmpegPath, result.FormatCode, result.VideoInput, func(msg tui.SignalStateMsg) {
+				sendToUI(msg)
+			})
+			poller.SetProbeHooks(stopAudioMeter, startAudioMeter)
+			startAudioMeter()
+		}()
+	} else {
+		// No auto-detect — start audio meter on the normal 4s delay.
+		go func() {
+			time.Sleep(4 * time.Second)
+			startAudioMeter()
+		}()
+	}
 
 	useMultiRecorder := len(resolvedDevices) > 1
 	multiDevices := toMultiRecorderDevices(resolvedDevices)

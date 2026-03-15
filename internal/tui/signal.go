@@ -12,6 +12,7 @@ type SignalPanel struct {
 	// Signal state
 	locked     bool
 	colorBars  bool
+	probing    bool
 	input      string
 	format     string
 	resolution string
@@ -35,6 +36,7 @@ func (p *SignalPanel) Init() tea.Cmd { return nil }
 func (p *SignalPanel) Update(msg SignalStateMsg) {
 	p.locked = msg.Locked
 	p.colorBars = msg.ColorBars
+	p.probing = msg.Probing
 	p.input = msg.Input
 	p.format = msg.Format
 	p.resolution = msg.Resolution
@@ -100,6 +102,11 @@ func (p SignalPanel) View(width, height int) string {
 }
 
 func (p SignalPanel) inputRow(inputName string) (indicator, detail string) {
+	if p.probing {
+		indicator = styleWarning.Render("⟳")
+		detail = inputName + "  probing..."
+		return
+	}
 	if inputName == p.input || (p.input == "" && inputName == "SDI") {
 		if p.colorBars {
 			indicator = styleWarning.Render("◑")
