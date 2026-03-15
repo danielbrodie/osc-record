@@ -33,53 +33,25 @@ Saves results to the config file. Use this for scripted or headless environments
 
 		// Step 1: OSC record address
 		fmt.Printf("Current record address: %q\n", cfg.OSC.RecordAddress)
-		fmt.Printf("Listening on port %d for 60 seconds — send your RECORD cue now (or press Enter to keep current)...\n", cfg.OSC.Port)
-		addr, err := listenForOSC(cfg.OSC.Port, 60*time.Second)
-		if err != nil {
-			if isPortInUse(err) {
-				fmt.Printf("\nError: %s\n", err)
-				return err
-			} else if cfg.OSC.RecordAddress == "" {
-				fmt.Println("\nNo OSC received. Configure manually in config.toml.")
-			} else {
-				fmt.Printf("\nTimeout — keeping %q\n", cfg.OSC.RecordAddress)
-			}
+		if addr := captureOSCAddress(reader, cfg.OSC.Port, "RECORD", 60*time.Second); addr != "" {
+			cfg.OSC.RecordAddress = addr
+			fmt.Printf("✓ Record address: %s\n\n", addr)
+		} else if cfg.OSC.RecordAddress != "" {
+			fmt.Printf("Keeping %q\n\n", cfg.OSC.RecordAddress)
 		} else {
-			fmt.Printf("\nReceived: %s\n", addr)
-			fmt.Printf("Use %q as record trigger? [Y/n]: ", addr)
-			line, _ := reader.ReadString('\n')
-			line = strings.TrimSpace(strings.ToLower(line))
-			if line == "" || line == "y" {
-				cfg.OSC.RecordAddress = addr
-				fmt.Printf("✓ Record address: %s\n", addr)
-			}
+			fmt.Println("Skipped — no record address set.\n")
 		}
-		fmt.Println()
 
 		// Step 2: OSC stop address
 		fmt.Printf("Current stop address: %q\n", cfg.OSC.StopAddress)
-		fmt.Printf("Listening on port %d for 60 seconds — send your STOP cue now (or press Enter to keep current)...\n", cfg.OSC.Port)
-		addr, err = listenForOSC(cfg.OSC.Port, 60*time.Second)
-		if err != nil {
-			if isPortInUse(err) {
-				fmt.Printf("\nError: %s\n", err)
-				return err
-			} else if cfg.OSC.StopAddress == "" {
-				fmt.Println("\nNo OSC received. Configure manually in config.toml.")
-			} else {
-				fmt.Printf("\nTimeout — keeping %q\n", cfg.OSC.StopAddress)
-			}
+		if addr := captureOSCAddress(reader, cfg.OSC.Port, "STOP", 60*time.Second); addr != "" {
+			cfg.OSC.StopAddress = addr
+			fmt.Printf("✓ Stop address: %s\n\n", addr)
+		} else if cfg.OSC.StopAddress != "" {
+			fmt.Printf("Keeping %q\n\n", cfg.OSC.StopAddress)
 		} else {
-			fmt.Printf("\nReceived: %s\n", addr)
-			fmt.Printf("Use %q as stop trigger? [Y/n]: ", addr)
-			line, _ := reader.ReadString('\n')
-			line = strings.TrimSpace(strings.ToLower(line))
-			if line == "" || line == "y" {
-				cfg.OSC.StopAddress = addr
-				fmt.Printf("✓ Stop address: %s\n", addr)
-			}
+			fmt.Println("Skipped — no stop address set.\n")
 		}
-		fmt.Println()
 
 		// Step 3: Output directory
 		fmt.Printf("Output directory [%s]: ", cfg.Recording.OutputDir)
@@ -110,6 +82,62 @@ Saves results to the config file. Use this for scripted or headless environments
 }
 
 // listenForOSC opens a UDP socket and returns the first OSC address received within timeout.
+// captureOSCAddress tries to receive an OSC packet for timeout, then falls back
+// to prompting the user to type the address manually. Returns "" if skipped.
+func captureOSCAddress(reader *bufio.Reader, port int, label string, timeout time.Duration) string {
+	fmt.Printf("Listening on port %d for %s — send your %s cue now, or type it manually and press Enter: ", port, timeout.Round(time.Second), label)
+
+	// Channel for OSC packet received from network
+	oscCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		addr, err := listenForOSC(port, timeout)
+		if err != nil {
+			errCh <- err
+		} else {
+			oscCh <- addr
+		}
+	}()
+
+	// Channel for manual keyboard input
+	inputCh := make(chan string, 1)
+	go func() {
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		inputCh <- line
+	}()
+
+	select {
+	case addr := <-oscCh:
+		fmt.Printf("\n  → received: %s\n", addr)
+		return addr
+	case line := <-inputCh:
+		if line == "" {
+			return ""
+		}
+		if !strings.HasPrefix(line, "/") {
+			line = "/" + line
+		}
+		return line
+	case err := <-errCh:
+		if isPortInUse(err) {
+			fmt.Printf("\nWarning: %s\n", err)
+		} else {
+			fmt.Printf("\nNo OSC received (timeout).\n")
+		}
+		fmt.Printf("Type the %s address manually (or press Enter to skip): ", label)
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return ""
+		}
+		if !strings.HasPrefix(line, "/") {
+			line = "/" + line
+		}
+		return line
+	}
+}
+
 func isPortInUse(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "address already in use")
 }
