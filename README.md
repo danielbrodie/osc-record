@@ -69,13 +69,20 @@ This installs `osc-record` and a pre-built ffmpeg with DeckLink support. You als
 scoop update osc-record
 ```
 
+**Reinstall** if something is broken:
+
+```powershell
+scoop uninstall osc-record ffmpeg-decklink
+scoop install osc-record
+```
+
 <details>
 <summary>Manual install (without Scoop)</summary>
 
-1. Install ffmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and add it to your PATH.
+1. Download `ffmpeg-decklink-windows-amd64.zip` from the [ffmpeg-decklink releases](https://github.com/danielbrodie/ffmpeg-decklink/releases), extract, and add the folder to your PATH. *(Plain ffmpeg from gyan.dev or winget does not include DeckLink support.)*
 2. Download `osc-record_windows_amd64.zip` from [Releases](https://github.com/danielbrodie/osc-record/releases).
 3. Extract and place `osc-record.exe` somewhere on your PATH (e.g. `C:\Users\You\bin\`).
-4. Install [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers if using DeckLink hardware.
+4. Install [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers.
 </details>
 
 ---
@@ -365,3 +372,11 @@ osc-record run --no-tui
 - Clear `video_input` and `format_code` in config to re-trigger detection
 - Use `F1` in the TUI to manually scan format codes
 - If auto-detect consistently fails, set `format_code` and `video_input` manually (see Format Codes above)
+
+### OSC port conflict on Windows
+
+On Windows, two processes cannot share the same UDP port simultaneously. If you run another OSC tool (e.g. Protokol) on port 8000 at the same time as osc-record, one will fail to bind. Use different ports, or close the other tool first. On macOS this is not a constraint — `SO_REUSEPORT` allows multiple processes to share a port.
+
+### ProRes not available on Windows
+
+`--profile prores` is macOS only (requires Apple VideoToolbox). Use `h264` or `hevc` on Windows.
