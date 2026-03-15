@@ -134,7 +134,7 @@ Runs as a plain daemon. Prints status lines to stdout. Works in systemd, launchd
 | `--port` | `8000` | OSC UDP listen port |
 | `--output` | `~/Dropbox/osc-record` | Output directory |
 | `--prefix` | `recording` | Filename prefix |
-| `--profile` | `h264` | Encoding profile: `h264`, `hevc`, `prores` |
+| `--profile` | `h264` | Encoding profile: `h264`, `hevc`, `prores` (macOS only) |
 | `--video-device` | from config | Override video device name |
 | `--capture-mode` | `auto` | `auto`, `decklink`, `avfoundation`, `dshow` |
 | `--no-tui` | `false` | Disable TUI, run as plain daemon |
@@ -163,7 +163,7 @@ format_code = ""                   # decklink only — auto-detected on first ru
 video_input = ""                   # decklink only — auto-detected on first run (sdi | hdmi)
 
 [recording]
-profile = "h264"                   # h264 | hevc | prores
+profile = "h264"                   # h264 | hevc | prores (macOS only)
 prefix = "SHOW"
 output_dir = "~/Dropbox/recordings/"
 
