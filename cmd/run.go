@@ -838,6 +838,8 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 				cancelAllMultiSizePollers()
 				return
 			case message := <-oscCh:
+				// Always forward to the TUI so the wizard overlay can capture it.
+				sendToUI(tui.WizardOSCSeenMsg{Address: message.Address})
 				switch {
 				case cfg.OSC.RecordAddress != "" && message.Address == cfg.OSC.RecordAddress:
 					startRecording()
