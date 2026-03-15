@@ -1010,16 +1010,26 @@ func (l *tuiOSCListener) serve(handler func(tuiOSCMessage)) {
 			continue
 		}
 
-		message, ok := packet.(*goosc.Message)
-		if !ok || handler == nil {
+		if handler == nil {
 			continue
 		}
 
-		handler(tuiOSCMessage{
-			Address:   message.Address,
-			Arguments: message.Arguments,
-			Source:    addr.String(),
-		})
+		// Collect messages from either a plain Message or a Bundle (e.g. Disguise sends bundles).
+		var messages []*goosc.Message
+		switch p := packet.(type) {
+		case *goosc.Message:
+			messages = []*goosc.Message{p}
+		case *goosc.Bundle:
+			messages = p.Messages
+		}
+
+		for _, message := range messages {
+			handler(tuiOSCMessage{
+				Address:   message.Address,
+				Arguments: message.Arguments,
+				Source:    addr.String(),
+			})
+		}
 	}
 }
 

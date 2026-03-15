@@ -176,9 +176,20 @@ func listenForOSC(port int, timeout time.Duration) (string, error) {
 			fmt.Printf("  (received non-OSC packet from %s, ignoring)\n", src)
 			continue
 		}
-		if msg, ok := pkt.(*osc.Message); ok && strings.HasPrefix(msg.Address, "/") {
-			fmt.Printf("  → received: %s (from %s)\n", msg.Address, src)
-			return msg.Address, nil
+		switch p := pkt.(type) {
+		case *osc.Message:
+			if strings.HasPrefix(p.Address, "/") {
+				fmt.Printf("  → received: %s (from %s)\n", p.Address, src)
+				return p.Address, nil
+			}
+		case *osc.Bundle:
+			// Disguise (and other systems) wrap messages in OSC bundles.
+			for _, msg := range p.Messages {
+				if strings.HasPrefix(msg.Address, "/") {
+					fmt.Printf("  → received: %s (from %s, in bundle)\n", msg.Address, src)
+					return msg.Address, nil
+				}
+			}
 		}
 	}
 }
