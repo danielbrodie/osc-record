@@ -3,6 +3,7 @@ package capture
 import (
 	"context"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -35,6 +36,29 @@ func (m DecklinkMode) BuildInputArgs(videoDevice, audioDevice string) []string {
 	args = append(args, m.buildInputModifiers()...)
 	args = append(args, "-i", videoDevice)
 	return args
+}
+
+// BuildExternalAudioArgs returns ffmpeg input args for a secondary audio source alongside
+// DeckLink video. On macOS, uses avfoundation (e.g. ":Dante Virtual Soundcard" or ":1").
+// On Windows, uses dshow (e.g. "Dante Virtual Soundcard"). On Linux, uses pulse.
+// Returns nil when audioDevice is empty (use DeckLink embedded audio).
+func (DecklinkMode) BuildExternalAudioArgs(audioDevice string) []string {
+	if audioDevice == "" {
+		return nil
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		// avfoundation audio-only input: ":deviceName" or ":index"
+		input := audioDevice
+		if len(audioDevice) > 0 && audioDevice[0] != ':' {
+			input = ":" + audioDevice
+		}
+		return []string{"-f", "avfoundation", "-i", input}
+	case "windows":
+		return []string{"-f", "dshow", "-i", "audio=" + audioDevice}
+	default: // linux
+		return []string{"-f", "pulse", "-i", audioDevice}
+	}
 }
 
 func (DecklinkMode) NeedsAudio() bool {

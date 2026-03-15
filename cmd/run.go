@@ -690,7 +690,14 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	// Start is delayed until after the initial signal probe completes (~3s).
 	var aMeter audiometer.Meter
 	var audioMu sync.Mutex
-	audioInputArgs := primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
+	// If the mode uses an external audio source (e.g. DeckLink + Dante), the audio meter
+	// should listen to that source directly — not the DeckLink device, which holds the lock.
+	audioInputArgs := func() []string {
+		if ext := primary.Mode.BuildExternalAudioArgs(primary.Selected.AudioConfigValue); ext != nil {
+			return ext
+		}
+		return primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
+	}()
 	startAudioMeter := func() {
 		audioMu.Lock()
 		args := audioInputArgs
@@ -801,7 +808,11 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 
 			// Rebuild audioInputArgs with the updated mode.
 			audioMu.Lock()
-			audioInputArgs = primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
+			if ext := primary.Mode.BuildExternalAudioArgs(primary.Selected.AudioConfigValue); ext != nil {
+				audioInputArgs = ext
+			} else {
+				audioInputArgs = primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
+			}
 			audioMu.Unlock()
 
 			sendToUI(tui.AutoDetectCompleteMsg{

@@ -148,6 +148,14 @@ func buildArgs(mode capture.CaptureMode, profile, videoDevice, audioDevice, outp
 	}
 
 	args := append([]string{}, mode.BuildInputArgs(videoDevice, audioDevice)...)
+
+	// If the mode provides a separate external audio source (e.g. DeckLink video + Dante audio),
+	// append it as a second input and map video from stream 0, audio from stream 1.
+	if extAudio := mode.BuildExternalAudioArgs(audioDevice); extAudio != nil {
+		args = append(args, extAudio...)
+		args = append(args, "-map", "0:v", "-map", "1:a")
+	}
+
 	switch profile {
 	case "prores":
 		args = append(args, "-c:v", "prores_ks", "-profile:v", "1", "-c:a", "pcm_s16le")

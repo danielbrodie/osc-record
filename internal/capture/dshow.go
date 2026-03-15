@@ -33,6 +33,9 @@ func (m DShowMode) BuildInputArgs(videoDevice, audioDevice string) []string {
 	return append(args, "-i", input)
 }
 
+// BuildExternalAudioArgs returns nil — dshow handles audio natively via "video=...:audio=..." input.
+func (DShowMode) BuildExternalAudioArgs(audioDevice string) []string { return nil }
+
 func (DShowMode) NeedsAudio() bool {
 	return true
 }

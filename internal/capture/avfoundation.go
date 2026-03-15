@@ -22,6 +22,9 @@ func (AVFoundationMode) BuildInputArgs(videoDevice, audioDevice string) []string
 	return []string{"-f", "avfoundation", "-i", input}
 }
 
+// BuildExternalAudioArgs returns nil — avfoundation handles audio natively via "video:audio" input.
+func (AVFoundationMode) BuildExternalAudioArgs(audioDevice string) []string { return nil }
+
 func (AVFoundationMode) NeedsAudio() bool {
 	return true
 }
