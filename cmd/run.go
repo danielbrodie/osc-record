@@ -608,11 +608,6 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	if runAutoDetect {
 		// Signal the TUI that we're probing.
 		sendToUI(tui.SignalStateMsg{Device: primary.Selected.VideoDisplay, Probing: true})
-
-		if cfg.HasMultipleDevices() {
-			sendToUI(tui.LogMsg{Time: time.Now(), Text: "⚠ Auto-detect skipped: multi-device config"})
-			runAutoDetect = false
-		}
 	}
 
 	if runAutoDetect {
