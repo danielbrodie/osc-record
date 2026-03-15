@@ -199,18 +199,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle overlay first — it captures most messages.
 	if m.overlay != nil {
-		switch msg.(type) {
-		case tea.KeyMsg:
-			// Let overlay handle keys; check for Esc to dismiss.
-		}
-		newOverlay, cmd := m.overlay.Update(msg)
-		cmds = append(cmds, cmd)
-		if newOverlay == nil {
+		// Auto-detect completion must bypass the overlay so the model can
+		// clear probing state and dismiss the InputChoiceOverlay when
+		// detection is cancelled (e.g. by a record trigger).
+		if _, ok := msg.(AutoDetectCompleteMsg); ok {
 			m.overlay = nil
+			// Fall through to main switch below.
 		} else {
-			m.overlay = newOverlay
+			newOverlay, cmd := m.overlay.Update(msg)
+			cmds = append(cmds, cmd)
+			if newOverlay == nil {
+				m.overlay = nil
+			} else {
+				m.overlay = newOverlay
+			}
+			return m, tea.Batch(cmds...)
 		}
-		return m, tea.Batch(cmds...)
 	}
 
 	switch msg := msg.(type) {
