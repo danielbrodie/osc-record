@@ -38,6 +38,31 @@ var KnownFormats = []FormatEntry{
 	{"hp60", "720p 60fps"},
 }
 
+// ProbeInput probes a specific video input (hdmi/sdi) for signal lock.
+// Returns true if the device locks on the given input (not color bars).
+// The caller is responsible for suspending any competing device access.
+func ProbeInput(ctx context.Context, ffmpegPath, device, videoInput string) (locked bool, err error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	args := []string{"-hide_banner", "-f", "decklink", "-video_input", videoInput, "-i", device, "-t", "1", "-f", "null", "-"}
+
+	cmd := exec.CommandContext(probeCtx, ffmpegPath, args...)
+	var out bytes.Buffer
+	cmd.Stderr = &out
+	err = cmd.Run()
+
+	if err != nil {
+		return false, nil // probe failed — no signal on this input
+	}
+
+	if strings.Contains(out.String(), "No input signal detected") {
+		return false, nil // color bars — not a live source
+	}
+
+	return true, nil
+}
+
 // Run probes each format code and reports progress via send. Stops on ctx cancel.
 func Run(ctx context.Context, ffmpegPath, device, videoInput string, send func(tui.ScanProgressMsg)) []tui.ScanResultEntry {
 	total := len(KnownFormats)
@@ -77,13 +102,17 @@ func probeFormat(ctx context.Context, ffmpegPath, device, videoInput string, f F
 	cmd.Stderr = &out
 	err := cmd.Run()
 
+	output := out.String()
+	colorBars := err == nil && strings.Contains(output, "No input signal detected")
+
 	entry := tui.ScanResultEntry{
 		FormatCode:  f.Code,
 		Description: f.Desc,
-		Locked:      err == nil,
+		Locked:      err == nil && !colorBars,
+		ColorBars:   colorBars,
 	}
 	if err != nil {
-		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+		lines := strings.Split(strings.TrimSpace(output), "\n")
 		for i := len(lines) - 1; i >= 0; i-- {
 			if l := strings.TrimSpace(lines[i]); l != "" {
 				entry.Err = l

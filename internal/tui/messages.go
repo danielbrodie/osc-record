@@ -138,3 +138,29 @@ type PreviewGrabbedMsg struct {
 	Path string
 	Err  error
 }
+
+// AutoDetectProgressMsg reports auto-detection progress to the TUI.
+type AutoDetectProgressMsg struct {
+	Phase  string // "input-probe", "format-scan", "complete", "failed"
+	Detail string // human-readable status, e.g. "Probing HDMI..."
+}
+
+// AutoDetectCompleteMsg is sent when auto-detection finishes.
+type AutoDetectCompleteMsg struct {
+	VideoInput string // "hdmi" or "sdi"; empty if BothLocked
+	FormatCode string // e.g. "Hp59"; empty if not yet resolved
+	FormatDesc string // e.g. "1080p 59.94fps"
+	BothLocked bool   // true if both inputs had signal — caller must disambiguate
+	Err        error
+}
+
+// InputChosenMsg is sent when the user picks an input from the disambiguation overlay.
+type InputChosenMsg struct {
+	VideoInput string // "hdmi" or "sdi"
+}
+
+// ConfigUpdatedMsg notifies the TUI that config values changed after auto-detect.
+type ConfigUpdatedMsg struct {
+	VideoInput string
+	FormatCode string
+}

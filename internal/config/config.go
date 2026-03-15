@@ -132,7 +132,8 @@ func Load(path string) (*Config, error) {
 
 func Save(path string, cfg *Config) error {
 	resolvedPath := ExpandPath(path)
-	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
+	dir := filepath.Dir(resolvedPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
@@ -141,7 +142,12 @@ func Save(path string, cfg *Config) error {
 		return err
 	}
 
-	return os.WriteFile(resolvedPath, buffer.Bytes(), 0o644)
+	// Write to a temporary file then rename for crash safety.
+	tmpPath := resolvedPath + ".tmp"
+	if err := os.WriteFile(tmpPath, buffer.Bytes(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, resolvedPath)
 }
 
 func Encode(w io.Writer, cfg Config) error {

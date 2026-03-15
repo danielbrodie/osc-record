@@ -12,6 +12,7 @@ type ScanResultEntry struct {
 	FormatCode  string
 	Description string
 	Locked      bool
+	ColorBars   bool   // card locked but outputting color bars (no live source)
 	Err         string
 }
 
@@ -91,7 +92,10 @@ func (s ScannerOverlay) View() string {
 		for _, r := range s.results {
 			icon := styleDim.Render("  ○ ")
 			status := styleDim.Render("no signal")
-			if r.Locked {
+			if r.ColorBars {
+				icon = styleWarning.Render("  ◑ ")
+				status = styleWarning.Render("color bars")
+			} else if r.Locked {
 				icon = styleLocked.Render("  ● ")
 				status = styleLocked.Render("LOCKED")
 			} else if r.Err != "" {
