@@ -6,7 +6,7 @@ import (
 	"github.com/danielbrodie/osc-record/internal/devices"
 )
 
-func ResolveMode(requested, ffmpegPath, goos, formatCode, videoInput string) (CaptureMode, string, error) {
+func ResolveMode(requested, ffmpegPath, goos, formatCode, videoInput, dshowVideoSize, dshowFramerate string) (CaptureMode, string, error) {
 	switch requested {
 	case "", ModeAuto:
 		supported, err := devices.HasDecklinkSupport(ffmpegPath)
@@ -17,6 +17,9 @@ func ResolveMode(requested, ffmpegPath, goos, formatCode, videoInput string) (Ca
 			return DecklinkMode{FormatCode: formatCode, VideoInput: videoInput}, "", nil
 		}
 		fallback := fallbackMode(goos)
+		if fallback == ModeDShow {
+			return DShowMode{VideoSize: dshowVideoSize, FrameRate: dshowFramerate}, warningForFallback(fallback), nil
+		}
 		return newMode(fallback), warningForFallback(fallback), nil
 	case ModeDecklink:
 		supported, err := devices.HasDecklinkSupport(ffmpegPath)
@@ -27,11 +30,16 @@ func ResolveMode(requested, ffmpegPath, goos, formatCode, videoInput string) (Ca
 			return nil, "", fmt.Errorf("Error: Capture mode set to %q but ffmpeg was not compiled with decklink support. Install ffmpeg with --with-decklink or set capture_mode to %q.", ModeDecklink, ModeAuto)
 		}
 		return DecklinkMode{FormatCode: formatCode, VideoInput: videoInput}, "", nil
-	case ModeAVFoundation, ModeDShow:
+	case ModeAVFoundation:
 		if !modeSupportedOnOS(requested, goos) {
 			return nil, "", fmt.Errorf("Error: Capture mode %q is not supported on %s.", requested, goos)
 		}
 		return newMode(requested), "", nil
+	case ModeDShow:
+		if !modeSupportedOnOS(requested, goos) {
+			return nil, "", fmt.Errorf("Error: Capture mode %q is not supported on %s.", requested, goos)
+		}
+		return DShowMode{VideoSize: dshowVideoSize, FrameRate: dshowFramerate}, "", nil
 	default:
 		return nil, "", fmt.Errorf("Error: Invalid capture mode %q.", requested)
 	}

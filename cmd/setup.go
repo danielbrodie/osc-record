@@ -42,7 +42,7 @@ Saves results to the config file. Use this for scripted or headless environments
 		// Step 1: Detect capture mode and probe devices.
 		devs := cfg.ActiveDevices()
 		deviceCfg := devs[0]
-		mode, _, err := capture.ResolveMode(deviceCfg.CaptureMode, ffmpegPath, runtime.GOOS, deviceCfg.FormatCode, deviceCfg.VideoInput)
+		mode, _, err := capture.ResolveMode(deviceCfg.CaptureMode, ffmpegPath, runtime.GOOS, deviceCfg.FormatCode, deviceCfg.VideoInput, deviceCfg.DShowVideoSize, deviceCfg.DShowFramerate)
 		if err != nil {
 			return err
 		}

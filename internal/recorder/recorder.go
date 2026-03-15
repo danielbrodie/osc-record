@@ -152,9 +152,9 @@ func buildArgs(mode capture.CaptureMode, profile, videoDevice, audioDevice, outp
 	case "prores":
 		args = append(args, "-c:v", "prores_ks", "-profile:v", "1", "-c:a", "pcm_s16le")
 	case "h264":
-		args = append(args, "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-c:a", "aac", "-b:a", "192k")
+		args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-preset", "fast", "-c:a", "aac", "-b:a", "192k")
 	case "hevc":
-		args = append(args, "-c:v", "libx265", "-crf", "22", "-preset", "fast", "-c:a", "aac", "-b:a", "192k")
+		args = append(args, "-c:v", "libx265", "-pix_fmt", "yuv420p", "-crf", "22", "-preset", "fast", "-c:a", "aac", "-b:a", "192k")
 	}
 	if slate.Show != "" {
 		args = append(args, "-metadata", "show="+slate.Show)

@@ -61,7 +61,7 @@ scoop bucket add danielbrodie https://github.com/danielbrodie/homebrew-tap
 scoop install osc-record
 ```
 
-This installs `osc-record` and ffmpeg automatically. You also need [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers (14.3+) for DeckLink capture.
+This installs `osc-record` and a pre-built ffmpeg with DeckLink support. You also need [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers (14.3+) for DeckLink capture.
 
 **Upgrade:**
 
@@ -295,11 +295,11 @@ port = 8080
 
 ## Capture Modes
 
-**`decklink`** — Recommended for Blackmagic hardware. Uses ffmpeg's native DeckLink integration. Embeds SDI audio. Requires ffmpeg built with `--enable-decklink` and Blackmagic Desktop Video drivers installed. Auto-selects if supported.
+**`decklink`** — Recommended for Blackmagic hardware on macOS and Windows. Uses ffmpeg's native DeckLink integration. Embeds SDI audio. Requires ffmpeg built with `--enable-decklink` (installed automatically by Homebrew/Scoop) and Blackmagic Desktop Video drivers. Auto-selects if supported.
 
-**`avfoundation`** — macOS fallback. No special ffmpeg required. Set `audio` to the matching audio device name if needed.
+**`avfoundation`** — macOS fallback for non-DeckLink cameras. No special ffmpeg required. Set `audio` to the matching audio device name if needed.
 
-**`dshow`** — Windows fallback. DirectShow equivalent.
+**`dshow`** — Windows fallback for non-DeckLink cameras. DirectShow equivalent.
 
 **`auto`** — Tries decklink first. Falls back to avfoundation (macOS) or dshow (Windows) if decklink is unavailable.
 
@@ -343,7 +343,7 @@ Ensure [Desktop Video](https://www.blackmagicdesign.com/support) drivers are ins
 osc-record devices
 ```
 
-You should see `Blackmagic WDM Capture` under Video devices. If not, unplug and replug the device. Note: on Windows, osc-record uses dshow mode (via the Blackmagic WDM driver) rather than native decklink mode — signal format is auto-detected from the incoming signal.
+You should see your DeckLink device listed. If not, unplug and replug the device. On Windows, osc-record uses native DeckLink mode (same as macOS) via the `ffmpeg-decklink` binary installed by Scoop.
 
 ### TUI doesn't launch / terminal too small
 

@@ -222,7 +222,7 @@ func resolveConfiguredDevices(ffmpegPath string, cfg cfgpkg.Config, videoOverrid
 	changed := false
 
 	for i, deviceCfg := range configured {
-		mode, warning, err := capture.ResolveMode(deviceCfg.CaptureMode, ffmpegPath, runtime.GOOS, deviceCfg.FormatCode, deviceCfg.VideoInput)
+		mode, warning, err := capture.ResolveMode(deviceCfg.CaptureMode, ffmpegPath, runtime.GOOS, deviceCfg.FormatCode, deviceCfg.VideoInput, deviceCfg.DShowVideoSize, deviceCfg.DShowFramerate)
 		if err != nil {
 			return nil, cfg, nil, false, err
 		}
@@ -326,6 +326,16 @@ func needsAutoDetect(cfg cfgpkg.Config, primary resolvedDevice) bool {
 	inputMissing := vi == "" || vi == "auto"
 	formatMissing := fc == ""
 	return inputMissing || formatMissing
+}
+
+// needsDShowAutoDetect returns true if the primary device is dshow and no
+// video size/framerate has been detected yet.
+func needsDShowAutoDetect(primary resolvedDevice) bool {
+	mode, ok := primary.Mode.(capture.DShowMode)
+	if !ok {
+		return false
+	}
+	return mode.VideoSize == ""
 }
 
 func startupProbeWarnings(ffmpegPath string, devices []resolvedDevice) []string {
@@ -489,6 +499,36 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	}
 
 	primary := primaryDevice(resolvedDevices)
+
+	// dshow signal detection: probe formats to find the live signal on first run.
+	// Runs before TUI starts so detection progress prints to stdout cleanly.
+	if needsDShowAutoDetect(primary) {
+		fmt.Println("Detecting video signal format...")
+		detectCtx, cancelDetect := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancelDetect()
+		result, detectErr := scanner.DetectDShowSignal(detectCtx, ffmpegPath, primary.Selected.VideoConfigValue, func(detail string) {
+			fmt.Printf("  %s\n", detail)
+		})
+		if detectErr != nil {
+			return fmt.Errorf("signal detection failed: %w\n\nEnsure your capture device has a live signal connected, then try again", detectErr)
+		}
+		fmt.Printf("✓ Signal detected: %s @ %s fps\n\n", result.VideoSize, result.FrameRate)
+		devices := cfg.ActiveDevices()
+		devices[0].DShowVideoSize = result.VideoSize
+		devices[0].DShowFramerate = result.FrameRate
+		cfg.SetDevices(devices, cfg.UsesDevicesArray())
+		primary.Config = devices[0]
+		primary.Mode = capture.DShowMode{
+			VideoSize: result.VideoSize,
+			FrameRate: result.FrameRate,
+		}
+		resolvedDevices[0] = primary
+		if saveErr := saveConfig(cfg); saveErr != nil {
+			fmt.Printf("Warning: failed to save config: %v\n", saveErr)
+		} else {
+			fmt.Println("Config saved.")
+		}
+	}
 
 	// Kill orphaned ffmpeg processes from a previous run that didn't clean up.
 	if n := killStaleFfmpeg(primary.Selected.VideoDisplay); n > 0 {
@@ -1399,6 +1439,35 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 			} else {
 				fmt.Println("Config saved.")
 			}
+		}
+	}
+
+	// dshow signal detection: probe formats to find the live signal on first run.
+	if needsDShowAutoDetect(primary) {
+		fmt.Println("Detecting video signal format...")
+		detectCtx, cancelDetect := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancelDetect()
+		result, detectErr := scanner.DetectDShowSignal(detectCtx, ffmpegPath, primary.Selected.VideoConfigValue, func(detail string) {
+			fmt.Printf("  %s\n", detail)
+		})
+		if detectErr != nil {
+			return fmt.Errorf("signal detection failed: %w\n\nEnsure your capture device has a live signal connected, then try again", detectErr)
+		}
+		fmt.Printf("✓ Signal detected: %s @ %s fps\n\n", result.VideoSize, result.FrameRate)
+		devices := cfg.ActiveDevices()
+		devices[0].DShowVideoSize = result.VideoSize
+		devices[0].DShowFramerate = result.FrameRate
+		cfg.SetDevices(devices, cfg.UsesDevicesArray())
+		primary.Config = devices[0]
+		primary.Mode = capture.DShowMode{
+			VideoSize: result.VideoSize,
+			FrameRate: result.FrameRate,
+		}
+		resolvedDevices[0] = primary
+		if saveErr := saveConfig(cfg); saveErr != nil {
+			fmt.Printf("Warning: failed to save config: %v\n", saveErr)
+		} else {
+			fmt.Println("Config saved.")
 		}
 	}
 

@@ -30,11 +30,13 @@ type OSCConfig struct {
 }
 
 type DeviceConfig struct {
-	CaptureMode string `toml:"capture_mode"`
-	Name        string `toml:"name"`
-	Audio       string `toml:"audio"`
-	FormatCode  string `toml:"format_code"`
-	VideoInput  string `toml:"video_input"` // sdi, hdmi, component, composite, s_video, auto (default)
+	CaptureMode   string `toml:"capture_mode"`
+	Name          string `toml:"name"`
+	Audio         string `toml:"audio"`
+	FormatCode    string `toml:"format_code"`
+	VideoInput    string `toml:"video_input"`    // sdi, hdmi, component, composite, s_video, auto (default)
+	DShowVideoSize string `toml:"dshow_video_size"` // dshow only — auto-detected on first run, e.g. "1920x1080"
+	DShowFramerate string `toml:"dshow_framerate"`  // dshow only — auto-detected on first run, e.g. "24"
 }
 
 type RecordingConfig struct {
