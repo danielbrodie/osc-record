@@ -585,6 +585,10 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	}()
 	defer stopAudioMeter()
 
+	// The signal poller and audio meter both need exclusive device access.
+	// Register hooks so the poller stops the meter before probing and restarts it after.
+	poller.SetProbeHooks(stopAudioMeter, startAudioMeter)
+
 	useMultiRecorder := len(resolvedDevices) > 1
 	multiDevices := toMultiRecorderDevices(resolvedDevices)
 

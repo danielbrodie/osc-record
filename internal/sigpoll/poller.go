@@ -19,18 +19,29 @@ var (
 )
 
 type Poller struct {
-	mode       string
-	stopCh     chan struct{}
-	triggerCh  chan struct{}
-	wg         sync.WaitGroup
-	mu         sync.Mutex
-	suspended  bool
-	running    bool
-	probeMu    sync.Mutex // held while a probe is in progress
+	mode         string
+	stopCh       chan struct{}
+	triggerCh    chan struct{}
+	wg           sync.WaitGroup
+	mu           sync.Mutex
+	suspended    bool
+	running      bool
+	probeMu      sync.Mutex  // held while a probe is in progress
+	onProbeStart func()      // called before each probe (e.g. stop audio meter)
+	onProbeEnd   func()      // called after each probe (e.g. restart audio meter)
 }
 
 func New(mode string) *Poller {
 	return &Poller{mode: mode}
+}
+
+// SetProbeHooks registers callbacks invoked around each device probe.
+// Use this to stop/restart the audio meter so the device isn't double-opened.
+func (p *Poller) SetProbeHooks(onStart, onEnd func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onProbeStart = onStart
+	p.onProbeEnd = onEnd
 }
 
 func (p *Poller) Start(device, ffmpegPath, formatCode, videoInput string, send func(tui.SignalStateMsg)) {
@@ -135,6 +146,17 @@ func (p *Poller) probe(device, ffmpegPath, formatCode, videoInput string, send f
 	defer p.probeMu.Unlock()
 	if send == nil {
 		return
+	}
+
+	p.mu.Lock()
+	onStart := p.onProbeStart
+	onEnd := p.onProbeEnd
+	p.mu.Unlock()
+	if onStart != nil {
+		onStart()
+	}
+	if onEnd != nil {
+		defer onEnd()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
