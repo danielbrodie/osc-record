@@ -77,7 +77,8 @@ func (s ScannerOverlay) View() string {
 	if s.total > 0 {
 		pct := float64(s.done) / float64(s.total)
 		bar := progressBar(pct, 40)
-		b.WriteString(fmt.Sprintf("  %s  %d/%d\n", bar, s.done, s.total))
+		count := styleDim.Render(fmt.Sprintf("%d/%d", s.done, s.total))
+		b.WriteString("  " + bar + "  " + count + "\n")
 		if s.current != "" && !s.finished {
 			b.WriteString(styleDim.Render("  Probing: "+s.current) + "\n")
 		}
@@ -131,6 +132,5 @@ func progressBar(pct float64, width int) string {
 	if filled > width {
 		filled = width
 	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-	return styleLocked.Render(bar[:filled]) + styleDim.Render(bar[filled:])
+	return styleLocked.Render(strings.Repeat("█", filled)) + styleDim.Render(strings.Repeat("░", width-filled))
 }

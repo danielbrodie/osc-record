@@ -260,6 +260,58 @@ func primaryDevice(devices []resolvedDevice) resolvedDevice {
 	return devices[0]
 }
 
+// killStaleFfmpeg finds and kills orphaned ffmpeg processes that hold the
+// DeckLink device open (e.g. from a previous osc-record that was killed
+// without proper cleanup). Returns the number of processes killed.
+func killStaleFfmpeg(deviceName string) int {
+	if runtime.GOOS == "windows" {
+		return 0 // tasklist parsing not implemented
+	}
+	// Use ps to get PID, PPID, and full command in one call.
+	out, err := exec.Command("ps", "-eo", "pid=,ppid=,command=").Output()
+	if err != nil {
+		return 0
+	}
+	myPid := os.Getpid()
+	killed := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		// Only consider ffmpeg processes using decklink.
+		if !strings.Contains(line, "ffmpeg") || !strings.Contains(line, "decklink") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		if pid == myPid {
+			continue
+		}
+		// Only kill orphaned processes (re-parented to init/launchd, PPID=1).
+		if ppid != 1 {
+			continue
+		}
+		// Check the process is actually using our device.
+		if deviceName != "" && !strings.Contains(line, deviceName) {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		_ = proc.Kill()
+		killed++
+	}
+	return killed
+}
+
 // needsAutoDetect returns true if the primary device is decklink, the config
 // is single-device, and either video_input or format_code is missing/auto.
 func needsAutoDetect(cfg cfgpkg.Config, primary resolvedDevice) bool {
@@ -437,6 +489,12 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	}
 
 	primary := primaryDevice(resolvedDevices)
+
+	// Kill orphaned ffmpeg processes from a previous run that didn't clean up.
+	if n := killStaleFfmpeg(primary.Selected.VideoDisplay); n > 0 {
+		time.Sleep(500 * time.Millisecond) // let the device release
+	}
+
 	model := tui.New(cfg.OSC.RecordAddress, cfg.OSC.StopAddress, configuredDeviceNames(resolvedDevices))
 	model.SetStatusDevices(toStatusDevices(resolvedDevices))
 	model.SetChecklistConfig(tui.ChecklistConfig{
@@ -1277,11 +1335,17 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 		fmt.Println("Warning: ProRes playback on Windows requires QuickTime or VLC.")
 	}
 
+	primary := primaryDevice(resolvedDevices)
+
+	// Kill orphaned ffmpeg processes from a previous run that didn't clean up.
+	if n := killStaleFfmpeg(primary.Selected.VideoDisplay); n > 0 {
+		fmt.Printf("Killed %d stale ffmpeg process(es) holding the device.\n", n)
+		time.Sleep(500 * time.Millisecond)
+	}
+
 	for _, warning := range startupProbeWarnings(ffmpegPath, resolvedDevices) {
 		fmt.Println(warning)
 	}
-
-	primary := primaryDevice(resolvedDevices)
 
 	// Plaintext auto-detect: blocking probe + numbered prompt for disambiguation.
 	if needsAutoDetect(cfg, primary) {

@@ -554,9 +554,11 @@ func (m Model) viewResize() string {
 }
 
 func (m Model) viewWithOverlay() string {
-	// Render overlay centered over main content
+	// Render overlay centered over a blank background so underlying panels
+	// don't bleed through.
 	ov := m.overlay.View()
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ov)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ov,
+		lipgloss.WithWhitespaceBackground(lipgloss.Color(colorBg)))
 }
 
 func (m Model) viewMain() string {
