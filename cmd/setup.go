@@ -61,8 +61,35 @@ Saves results to the config file. Use this for scripted or headless environments
 		deviceCfg.Name = video.ConfigValue()
 		fmt.Printf("✓ Video device: %s\n\n", video.Name)
 
-		// Step 3: Audio device (dshow and avfoundation require explicit audio).
-		if mode.NeedsAudio() {
+		// Step 3: Audio device.
+		// For avfoundation/dshow, an explicit audio device is required.
+		// For DeckLink, the default is embedded audio — but the user can override
+		// with any system audio device (Dante, line-in, etc.).
+		if mode.Name() == capture.ModeDecklink {
+			fmt.Println("Audio source:")
+			fmt.Println("  0) Embedded (DeckLink — default)")
+			for i, d := range group.Audio {
+				fmt.Printf("  %d) %s\n", i+1, d.Name)
+			}
+			fmt.Print("Select [0]: ")
+			line, _ := reader.ReadString('\n')
+			line = strings.TrimSpace(line)
+			if line == "" || line == "0" {
+				deviceCfg.Audio = ""
+				fmt.Print("✓ Audio: embedded (DeckLink)\n\n")
+			} else {
+				idx := 0
+				fmt.Sscanf(line, "%d", &idx)
+				if idx >= 1 && idx <= len(group.Audio) {
+					chosen := group.Audio[idx-1]
+					deviceCfg.Audio = chosen.ConfigValue()
+					fmt.Printf("✓ Audio: %s\n\n", chosen.Name)
+				} else {
+					deviceCfg.Audio = ""
+					fmt.Print("✓ Audio: embedded (DeckLink)\n\n")
+				}
+			}
+		} else if mode.NeedsAudio() {
 			if matched, matchErr := devices.BestAudioMatch(group.Audio, video.Name); matchErr == nil {
 				deviceCfg.Audio = matched.ConfigValue()
 				fmt.Printf("✓ Audio device: %s (auto-matched)\n\n", matched.Name)
