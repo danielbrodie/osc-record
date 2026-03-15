@@ -20,6 +20,8 @@ Built for theatrical environments where recording needs to be hands-free, show-c
 
 ## Install
 
+### macOS
+
 ```sh
 brew tap danielbrodie/tap
 brew install osc-record
@@ -27,19 +29,20 @@ brew install osc-record
 
 This installs `osc-record` and a pre-built ffmpeg with DeckLink support. You also need [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers (14.3+) installed.
 
-**Upgrade** to the latest version:
+**Upgrade:**
 
 ```sh
 brew update && brew upgrade osc-record
 ```
 
-**Reinstall** if something is broken (stale tap, partial install, wrong ffmpeg):
+**Reinstall** if something is broken:
 
 ```sh
 brew reinstall osc-record ffmpeg-decklink
 ```
 
-If that doesn't fix it, do a full clean install:
+<details>
+<summary>Full clean install (if reinstall doesn't fix it)</summary>
 
 ```sh
 brew uninstall osc-record ffmpeg-decklink
@@ -47,15 +50,32 @@ brew untap danielbrodie/tap
 brew tap danielbrodie/tap
 brew install osc-record
 ```
+</details>
+
+### Windows
+
+**Via Scoop (recommended):**
+
+```powershell
+scoop bucket add danielbrodie https://github.com/danielbrodie/homebrew-tap
+scoop install osc-record
+```
+
+This installs `osc-record` and ffmpeg automatically. You also need [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers (14.3+) for DeckLink capture.
+
+**Upgrade:**
+
+```powershell
+scoop update osc-record
+```
 
 <details>
-<summary>Manual install / Windows</summary>
+<summary>Manual install (without Scoop)</summary>
 
-Download the latest binary from [Releases](https://github.com/danielbrodie/osc-record/releases) and put it in your `$PATH`.
-
-You need ffmpeg in your `$PATH` (or set `ffmpeg.path` in config). For Blackmagic devices, ffmpeg must be built with `--enable-decklink`.
-
-For Windows, download `osc-record_windows_amd64.zip`. Requires Blackmagic Desktop Video drivers.
+1. Install ffmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and add it to your PATH.
+2. Download `osc-record_windows_amd64.zip` from [Releases](https://github.com/danielbrodie/osc-record/releases).
+3. Extract and place `osc-record.exe` somewhere on your PATH (e.g. `C:\Users\You\bin\`).
+4. Install [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers if using DeckLink hardware.
 </details>
 
 ---
@@ -311,8 +331,19 @@ osc-record looks for both `ffmpeg` and `ffmpeg-decklink` on your PATH. If neithe
 
 ```toml
 [ffmpeg]
-path = "/opt/homebrew/bin/ffmpeg"
+path = "/opt/homebrew/bin/ffmpeg"      # macOS
+# path = "C:/ffmpeg/bin/ffmpeg.exe"   # Windows
 ```
+
+### Blackmagic device not found on Windows (`osc-record devices` shows nothing)
+
+Ensure [Desktop Video](https://www.blackmagicdesign.com/support) drivers are installed. Then run:
+
+```powershell
+osc-record devices
+```
+
+You should see `Blackmagic WDM Capture` under Video devices. If not, unplug and replug the device. Note: on Windows, osc-record uses dshow mode (via the Blackmagic WDM driver) rather than native decklink mode — signal format is auto-detected from the incoming signal.
 
 ### TUI doesn't launch / terminal too small
 
