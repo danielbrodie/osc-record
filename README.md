@@ -279,6 +279,10 @@ MIT
 
 ## Troubleshooting
 
+### Disguise / d3 OSC
+
+Disguise sends OSC inside **bundle packets** (`#bundle`). osc-record handles bundles correctly as of v1.1.5. If you upgraded from an earlier version and setup/recording never triggered from Disguise, reinstall to get v1.1.5+.
+
 ### Reinstall / upgrade
 
 To fully reinstall (e.g. after a version bump):
