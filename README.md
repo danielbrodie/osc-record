@@ -49,7 +49,7 @@ Download `osc-record_windows_amd64.zip` from [Releases](https://github.com/danie
 osc-record setup
 ```
 
-The setup wizard walks you through: picking your capture device, configuring your record/stop OSC addresses (it listens for a real OSC message so you just fire the cue), setting output directory and filename prefix. Config is saved automatically.
+The setup wizard walks you through: picking your capture device, choosing your video input (HDMI, SDI, or auto-detect), configuring your record/stop OSC addresses (it listens for a real OSC message so you just fire the cue), setting output directory and filename prefix. Config is saved automatically.
 
 For headless/automation environments:
 
@@ -62,6 +62,8 @@ osc-record setup --no-tui
 ```sh
 osc-record run
 ```
+
+On first run with a DeckLink device, osc-record **auto-detects** the video input (HDMI/SDI) and format code — no manual configuration needed. The signal panel shows `⟳ probing...` while detection runs, then transitions to a locked signal. Detected values are saved to config so subsequent runs skip detection.
 
 The TUI launches showing signal lock status, VU meters, OSC monitor, and clip list. Send your record OSC message — recording starts on all devices. Send the stop message — files are saved.
 
@@ -118,8 +120,8 @@ stop_address = "/stop/record/"
 [device]
 capture_mode = "decklink"          # decklink | avfoundation | dshow | auto
 name = "UltraStudio Recorder 3G"
-format_code = "Hp59"               # decklink only — see Format Codes below
-video_input = ""                   # decklink only: sdi | hdmi | component | auto
+format_code = ""                   # decklink only — auto-detected on first run
+video_input = ""                   # decklink only — auto-detected on first run (sdi | hdmi)
 
 [recording]
 profile = "h264"                   # h264 | hevc | prores
@@ -168,9 +170,9 @@ Output files are named `{prefix}-{DeviceShortName}-{YYYY-MM-DD-HHmmss}.mp4`. Wit
 
 ## Format Codes (DeckLink)
 
-Most DeckLink devices autodetect the incoming signal. Some (including UltraStudio Recorder 3G over SDI) require `format_code` to be set explicitly. If you get `Cannot Autodetect input stream`, set this.
+As of v1.2.0, osc-record **auto-detects** the format code on first run. The detected value is saved to `config.toml` — clear `format_code` to re-trigger detection.
 
-List the codes supported by your device:
+If auto-detection fails or you want to set it manually, list the codes supported by your device:
 
 ```sh
 ffmpeg -f decklink -list_formats 1 -i "Your Device Name"
@@ -223,9 +225,10 @@ The TUI has five panels:
 |-----|--------|
 | `R` | Start recording |
 | `S` | Stop recording |
+| `N` | Slate — set show, scene, take metadata |
+| `T` | Reset take counter |
 | `P` | Grab preview frame → open in system image viewer |
 | `V` | Open last clip in system video player |
-| `T` | Reset take counter |
 | `F1` | Signal scanner — probe all format codes on the device |
 | `F2` | Pre-show checklist overlay |
 | `W` | Setup wizard overlay |
@@ -325,4 +328,10 @@ osc-record run --no-tui
 - Ensure [Desktop Video](https://www.blackmagicdesign.com/support) drivers are installed
 - Try unplugging and replugging the device
 - Run `osc-record devices` to confirm detection
-- If using SDI and autodetect fails, set `format_code` in config (see Format Codes above)
+
+### Auto-detect didn't find a signal
+
+- Ensure a camera is connected and powered on before running `osc-record run`
+- Clear `video_input` and `format_code` in config to re-trigger detection
+- Use `F1` in the TUI to manually scan format codes
+- If auto-detect consistently fails, set `format_code` and `video_input` manually (see Format Codes above)
