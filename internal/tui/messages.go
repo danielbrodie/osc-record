@@ -10,6 +10,7 @@ type SignalStateMsg struct {
 	Resolution string // e.g. "1920x1080"
 	FPS        string // e.g. "59.94"
 	Locked     bool
+	ColorBars  bool   // true when card locked but no live source (outputting color bars)
 	Err        string // non-empty if probe errored
 }
 

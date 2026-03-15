@@ -160,13 +160,18 @@ func (p *Poller) probe(device, ffmpegPath, formatCode, videoInput string, send f
 	if videoInput != "" && videoInput != "auto" && videoInput != "sdi" {
 		inputLabel = strings.ToUpper(videoInput)
 	}
+	// "No input signal detected" appears when the card is locked but the source
+	// is absent — the card outputs color bars in this state.
+	colorBars := err == nil && strings.Contains(output, "No input signal detected")
+
 	msg := tui.SignalStateMsg{
 		Device:     device,
 		Input:      inputLabel,
 		Format:     formatCode,
 		Resolution: firstMatch(output, resolutionPattern),
 		FPS:        firstSubmatch(output, fpsPattern),
-		Locked:     err == nil,
+		Locked:     err == nil && !colorBars,
+		ColorBars:  colorBars,
 	}
 	if err != nil {
 		msg.Err = probeError(output, err)

@@ -76,7 +76,8 @@ type Model struct {
 	recordState RecordingState
 
 	// Signal state
-	signalLocked bool
+	signalLocked    bool
+	signalColorBars bool
 	signalFormat string
 	signalInput  string
 	signalRes    string
@@ -217,17 +218,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SignalStateMsg:
 		// Only log on state transitions, not every poll.
 		prevLocked := m.signalLocked
+		prevColorBars := m.signalColorBars
 		prevSig := m.signalInput + " " + m.signalRes + " " + m.signalFPS + " " + m.signalFormat
 		m.signalLocked = msg.Locked
+		m.signalColorBars = msg.ColorBars
 		m.signalFormat = msg.Format
 		m.signalInput = msg.Input
 		m.signalRes = msg.Resolution
 		m.signalFPS = msg.FPS
 		m.signalPanel.Update(msg)
 		curSig := msg.Input + " " + msg.Resolution + " " + msg.FPS + " " + msg.Format
-		if msg.Locked && (!prevLocked || curSig != prevSig) {
+		if msg.ColorBars && !prevColorBars {
+			m.addLog("◑ " + msg.Input + " color bars — no source connected")
+		} else if msg.Locked && (!prevLocked || curSig != prevSig) {
 			m.addLog("✓ Signal: " + msg.Input + " " + msg.Resolution + " " + msg.FPS + "fps " + msg.Format)
-		} else if !msg.Locked && prevLocked {
+		} else if !msg.Locked && !msg.ColorBars && (prevLocked || prevColorBars) {
 			m.addLog("✗ Signal lost")
 		}
 

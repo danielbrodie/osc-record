@@ -11,6 +11,7 @@ import (
 type SignalPanel struct {
 	// Signal state
 	locked     bool
+	colorBars  bool
 	input      string
 	format     string
 	resolution string
@@ -33,6 +34,7 @@ func (p *SignalPanel) Init() tea.Cmd { return nil }
 
 func (p *SignalPanel) Update(msg SignalStateMsg) {
 	p.locked = msg.Locked
+	p.colorBars = msg.ColorBars
 	p.input = msg.Input
 	p.format = msg.Format
 	p.resolution = msg.Resolution
@@ -99,7 +101,10 @@ func (p SignalPanel) View(width, height int) string {
 
 func (p SignalPanel) inputRow(inputName string) (indicator, detail string) {
 	if inputName == p.input || (p.input == "" && inputName == "SDI") {
-		if p.locked {
+		if p.colorBars {
+			indicator = styleWarning.Render("◑")
+			detail = fmt.Sprintf("%-4s  color bars (no source)", inputName)
+		} else if p.locked {
 			indicator = styleLocked.Render("●")
 			detail = fmt.Sprintf("%-4s  %s  %sfps  %s", inputName, p.resolution, p.fps, p.format)
 		} else if p.signalErr != "" {
