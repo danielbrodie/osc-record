@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/hypebeast/go-osc/osc"
 	"github.com/spf13/cobra"
+	"github.com/danielbrodie/osc-record/internal/capture"
 	cfgpkg "github.com/danielbrodie/osc-record/internal/config"
+	"github.com/danielbrodie/osc-record/internal/devices"
 )
 
 func init() {
@@ -31,7 +34,71 @@ Saves results to the config file. Use this for scripted or headless environments
 		fmt.Println(strings.Repeat("─", 40))
 		fmt.Println()
 
-		// Step 1: OSC record address
+		ffmpegPath, err := resolveFFmpegPath(cfg)
+		if err != nil {
+			return err
+		}
+
+		// Step 1: Detect capture mode and probe devices.
+		devs := cfg.ActiveDevices()
+		deviceCfg := devs[0]
+		mode, _, err := capture.ResolveMode(deviceCfg.CaptureMode, ffmpegPath, runtime.GOOS, deviceCfg.FormatCode, deviceCfg.VideoInput)
+		if err != nil {
+			return err
+		}
+
+		group, err := devices.ProbeMode(ffmpegPath, mode.Name())
+		if err != nil {
+			return fmt.Errorf("failed to probe devices: %w", err)
+		}
+
+		// Step 2: Video device selection.
+		fmt.Printf("Capture mode: %s\n\n", mode.Summary())
+		video, err := promptForDevice(group.Video, "capture device", mode.Name() == capture.ModeDecklink)
+		if err != nil {
+			return err
+		}
+		deviceCfg.Name = video.ConfigValue()
+		fmt.Printf("✓ Video device: %s\n\n", video.Name)
+
+		// Step 3: Audio device (dshow and avfoundation require explicit audio).
+		if mode.NeedsAudio() {
+			if matched, matchErr := devices.BestAudioMatch(group.Audio, video.Name); matchErr == nil {
+				deviceCfg.Audio = matched.ConfigValue()
+				fmt.Printf("✓ Audio device: %s (auto-matched)\n\n", matched.Name)
+			} else {
+				audio, promptErr := promptForDevice(group.Audio, "audio device", false)
+				if promptErr != nil {
+					return promptErr
+				}
+				deviceCfg.Audio = audio.ConfigValue()
+				fmt.Printf("✓ Audio device: %s\n\n", audio.Name)
+			}
+		}
+
+		// Step 4: Video input — only relevant for DeckLink (HDMI vs SDI).
+		var videoInput string
+		if mode.Name() == capture.ModeDecklink {
+			fmt.Printf("Video input [1=HDMI / 2=SDI / 3=Auto-detect (default)]: ")
+			line, _ := reader.ReadString('\n')
+			line = strings.TrimSpace(line)
+			switch line {
+			case "1", "hdmi", "HDMI":
+				videoInput = "hdmi"
+				fmt.Printf("✓ Video input: HDMI\n\n")
+			case "2", "sdi", "SDI":
+				videoInput = "sdi"
+				fmt.Printf("✓ Video input: SDI\n\n")
+			default:
+				videoInput = ""
+				fmt.Printf("✓ Video input: Auto-detect (on next run)\n\n")
+			}
+		}
+		deviceCfg.VideoInput = videoInput
+		devs[0] = deviceCfg
+		cfg.SetDevices(devs, cfg.UsesDevicesArray())
+
+		// Step 5: OSC record address.
 		fmt.Printf("Current record address: %q\n", cfg.OSC.RecordAddress)
 		if addr := captureOSCAddress(reader, cfg.OSC.Port, "RECORD", 60*time.Second); addr != "" {
 			cfg.OSC.RecordAddress = addr
@@ -42,7 +109,7 @@ Saves results to the config file. Use this for scripted or headless environments
 			fmt.Println("Skipped — no record address set.\n")
 		}
 
-		// Step 2: OSC stop address
+		// Step 6: OSC stop address.
 		fmt.Printf("Current stop address: %q\n", cfg.OSC.StopAddress)
 		if addr := captureOSCAddress(reader, cfg.OSC.Port, "STOP", 60*time.Second); addr != "" {
 			cfg.OSC.StopAddress = addr
@@ -53,37 +120,16 @@ Saves results to the config file. Use this for scripted or headless environments
 			fmt.Println("Skipped — no stop address set.\n")
 		}
 
-		// Step 3: Video input
-		fmt.Printf("Video input [1=HDMI / 2=SDI / 3=Auto-detect (default)]: ")
-		line, _ := reader.ReadString('\n')
-		line = strings.TrimSpace(line)
-		var videoInput string
-		switch line {
-		case "1", "hdmi", "HDMI":
-			videoInput = "hdmi"
-			fmt.Printf("✓ Video input: HDMI\n\n")
-		case "2", "sdi", "SDI":
-			videoInput = "sdi"
-			fmt.Printf("✓ Video input: SDI\n\n")
-		default:
-			videoInput = ""
-			fmt.Printf("✓ Video input: Auto-detect (on next run)\n\n")
-		}
-		// Update through SetDevices so array-backed [[devices]] configs are handled.
-		devs := cfg.ActiveDevices()
-		devs[0].VideoInput = videoInput
-		cfg.SetDevices(devs, cfg.UsesDevicesArray())
-
-		// Step 4: Output directory
+		// Step 7: Output directory.
 		fmt.Printf("Output directory [%s]: ", cfg.Recording.OutputDir)
-		line, _ = reader.ReadString('\n')
+		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
 		if line != "" {
 			cfg.Recording.OutputDir = line
 		}
 		fmt.Printf("✓ Output: %s\n\n", cfg.Recording.OutputDir)
 
-		// Step 5: Prefix
+		// Step 8: Filename prefix.
 		fmt.Printf("Filename prefix [%s]: ", cfg.Recording.Prefix)
 		line, _ = reader.ReadString('\n')
 		line = strings.TrimSpace(line)
@@ -92,7 +138,7 @@ Saves results to the config file. Use this for scripted or headless environments
 		}
 		fmt.Printf("✓ Prefix: %s\n\n", cfg.Recording.Prefix)
 
-		// Save
+		// Save.
 		if err := saveConfig(cfg); err != nil {
 			return fmt.Errorf("failed to save config: %w", err)
 		}

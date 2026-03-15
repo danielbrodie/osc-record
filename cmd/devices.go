@@ -50,7 +50,11 @@ var devicesCmd = &cobra.Command{
 					fmt.Println("  (none found)")
 				} else {
 					for _, item := range group.Video {
-						fmt.Printf("  [%s] %s\n", item.ID, item.Name)
+						if item.ID == "" {
+							fmt.Printf("  %s\n", item.Name)
+						} else {
+							fmt.Printf("  [%s] %s\n", item.ID, item.Name)
+						}
 					}
 				}
 				fmt.Println()

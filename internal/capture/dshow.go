@@ -1,7 +1,5 @@
 package capture
 
-import "fmt"
-
 type DShowMode struct{}
 
 func (DShowMode) Name() string {
@@ -13,7 +11,11 @@ func (DShowMode) Summary() string {
 }
 
 func (DShowMode) BuildInputArgs(videoDevice, audioDevice string) []string {
-	return []string{"-f", "dshow", "-i", fmt.Sprintf("video=%q:audio=%q", videoDevice, audioDevice)}
+	input := "video=" + videoDevice
+	if audioDevice != "" {
+		input += ":audio=" + audioDevice
+	}
+	return []string{"-f", "dshow", "-i", input}
 }
 
 func (DShowMode) NeedsAudio() bool {

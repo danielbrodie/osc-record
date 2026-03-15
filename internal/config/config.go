@@ -62,6 +62,10 @@ type TUIConfig struct {
 }
 
 func Defaults() Config {
+	outputDir := "~/Dropbox/osc-record/"
+	if runtime.GOOS == "windows" {
+		outputDir = "~/Videos/osc-record/"
+	}
 	return Config{
 		OSC: OSCConfig{
 			Port:          8000,
@@ -76,7 +80,7 @@ func Defaults() Config {
 		Recording: RecordingConfig{
 			Profile:   "h264",
 			Prefix:    "recording",
-			OutputDir: "~/Dropbox/osc-record/",
+			OutputDir: outputDir,
 			PreRoll:   0,
 		},
 		FFmpeg: FFmpegConfig{

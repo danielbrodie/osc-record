@@ -189,6 +189,16 @@ func parseAVFoundation(output string) ([]Device, []Device) {
 }
 
 func parseDShow(output string) ([]Device, []Device) {
+	// ffmpeg 6+ changed dshow device listing from section-header format to
+	// per-line type annotations: `"Device Name" (video|audio|audio, video)`.
+	// Support both formats.
+	if strings.Contains(output, "DirectShow video devices") || strings.Contains(output, "DirectShow audio devices") {
+		return parseDShowOld(output)
+	}
+	return parseDShowNew(output)
+}
+
+func parseDShowOld(output string) ([]Device, []Device) {
 	quotePattern := regexp.MustCompile(`"([^"]+)"`)
 	lines := strings.Split(output, "\n")
 	section := ""
@@ -212,6 +222,48 @@ func parseDShow(output string) ([]Device, []Device) {
 			} else if section == "audio" {
 				audio = append(audio, item)
 			}
+		}
+	}
+
+	return uniqueDevices(video), uniqueDevices(audio)
+}
+
+func parseDShowNew(output string) ([]Device, []Device) {
+	// Per-line format: `[dshow @ addr] "Device Name" (video|audio|audio, video)`
+	// Alternative name lines follow each device and must be skipped.
+	quotePattern := regexp.MustCompile(`"([^"]+)"`)
+	typePattern := regexp.MustCompile(`\(([^)]+)\)\s*$`)
+	lines := strings.Split(output, "\n")
+	video := make([]Device, 0)
+	audio := make([]Device, 0)
+
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\r")
+
+		typeMatches := typePattern.FindStringSubmatch(line)
+		if len(typeMatches) < 2 {
+			continue
+		}
+		types := typeMatches[1]
+
+		nameMatches := quotePattern.FindStringSubmatch(line)
+		if len(nameMatches) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(nameMatches[1])
+		if name == "" || strings.HasPrefix(name, "@") {
+			continue
+		}
+
+		item := Device{Name: name}
+		if strings.Contains(types, "video") {
+			video = append(video, item)
+		}
+		// Only include pure audio devices in the audio list. Combo (audio, video)
+		// devices cannot be used as the audio= source in ffmpeg dshow's combined
+		// video=X:audio=Y input syntax.
+		if strings.TrimSpace(types) == "audio" {
+			audio = append(audio, item)
 		}
 	}
 
@@ -246,7 +298,9 @@ func BestAudioMatch(audioDevices []Device, videoName string) (Device, error) {
 		}
 	}
 
-	// Word-by-word match — find audio device sharing a meaningful word with video device
+	// Word-by-word match — find audio device sharing a meaningful word with video device.
+	// Score is weighted by word length so brand/model words (e.g. "Blackmagic", "UltraStudio")
+	// outrank generic words (e.g. "Capture", "Audio") when breaking ties.
 	videoWords := strings.Fields(videoLower)
 	bestScore := 0
 	var best Device
@@ -255,7 +309,7 @@ func BestAudioMatch(audioDevices []Device, videoName string) (Device, error) {
 		score := 0
 		for _, w := range videoWords {
 			if len(w) > 2 && strings.Contains(audioLower, w) {
-				score++
+				score += len(w)
 			}
 		}
 		if score > bestScore {
