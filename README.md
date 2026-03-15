@@ -52,6 +52,21 @@ brew install osc-record
 ```
 </details>
 
+### Linux
+
+Download the binary from [Releases](https://github.com/danielbrodie/osc-record/releases), extract, and place `osc-record` on your PATH:
+
+```sh
+tar -xzf osc-record_linux_amd64.tar.gz
+sudo mv osc-record /usr/local/bin/
+```
+
+For DeckLink capture, install [Blackmagic Desktop Video for Linux](https://www.blackmagicdesign.com/support) (15.3.1+) and ffmpeg built with `--enable-decklink`. Without Desktop Video drivers, osc-record will run but DeckLink devices won't be available.
+
+**Upgrade:** re-download the binary from Releases and replace the existing one.
+
+---
+
 ### Windows
 
 **Via Scoop (recommended):**
@@ -302,7 +317,7 @@ port = 8080
 
 ## Capture Modes
 
-**`decklink`** — Recommended for Blackmagic hardware on macOS and Windows. Uses ffmpeg's native DeckLink integration. Embeds SDI audio. Requires ffmpeg built with `--enable-decklink` (installed automatically by Homebrew/Scoop) and Blackmagic Desktop Video drivers. Auto-selects if supported.
+**`decklink`** — Recommended for Blackmagic hardware on macOS, Windows, and Linux. Uses ffmpeg's native DeckLink integration. Embeds SDI audio (or route to an external audio source via `device.audio`). Requires ffmpeg built with `--enable-decklink` and Blackmagic Desktop Video drivers. Auto-selects if supported.
 
 **`avfoundation`** — macOS fallback for non-DeckLink cameras. No special ffmpeg required. Set `audio` to the matching audio device name if needed.
 
@@ -316,7 +331,7 @@ port = 8080
 
 - macOS 12+ or Windows 10+
 - ffmpeg in `$PATH` (or set `ffmpeg.path` in config)
-- **For DeckLink capture**: [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) 14.3+, ffmpeg with `--enable-decklink`
+- **For DeckLink capture**: [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) 14.3+ (macOS/Windows) or 15.3.1+ (Linux), ffmpeg with `--enable-decklink`
 
 ---
 
