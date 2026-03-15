@@ -5,6 +5,8 @@ package cmd
 import (
 	"net"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // reusePortListenConfig returns a net.ListenConfig that sets SO_REUSEPORT,
@@ -15,7 +17,7 @@ func reusePortListenConfig() net.ListenConfig {
 		Control: func(network, address string, c syscall.RawConn) error {
 			var setSockOptErr error
 			err := c.Control(func(fd uintptr) {
-				setSockOptErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+				setSockOptErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 			})
 			if err != nil {
 				return err
