@@ -57,17 +57,22 @@ Saves results to the config file. Use this for scripted or headless environments
 		fmt.Printf("Video input [1=HDMI / 2=SDI / 3=Auto-detect (default)]: ")
 		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
+		var videoInput string
 		switch line {
 		case "1", "hdmi", "HDMI":
-			cfg.Device.VideoInput = "hdmi"
+			videoInput = "hdmi"
 			fmt.Printf("✓ Video input: HDMI\n\n")
 		case "2", "sdi", "SDI":
-			cfg.Device.VideoInput = "sdi"
+			videoInput = "sdi"
 			fmt.Printf("✓ Video input: SDI\n\n")
 		default:
-			cfg.Device.VideoInput = ""
+			videoInput = ""
 			fmt.Printf("✓ Video input: Auto-detect (on next run)\n\n")
 		}
+		// Update through SetDevices so array-backed [[devices]] configs are handled.
+		devs := cfg.ActiveDevices()
+		devs[0].VideoInput = videoInput
+		cfg.SetDevices(devs, cfg.UsesDevicesArray())
 
 		// Step 4: Output directory
 		fmt.Printf("Output directory [%s]: ", cfg.Recording.OutputDir)

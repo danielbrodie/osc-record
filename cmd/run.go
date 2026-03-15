@@ -591,9 +591,13 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 	// the audio meter still needs the device so we keep the same suspend/resume pattern).
 	// Start is delayed until after the initial signal probe completes (~3s).
 	var aMeter audiometer.Meter
+	var audioMu sync.Mutex
 	audioInputArgs := primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
 	startAudioMeter := func() {
-		aMeter.Start(ffmpegPath, audioInputArgs, func(msg tui.AudioLevelMsg) {
+		audioMu.Lock()
+		args := audioInputArgs
+		audioMu.Unlock()
+		aMeter.Start(ffmpegPath, args, func(msg tui.AudioLevelMsg) {
 			sendToUI(msg)
 		})
 	}
@@ -638,6 +642,14 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 
 				// Wait for user to pick an input via the overlay.
 				chosenInput := <-inputChoiceCh
+				if chosenInput == "" {
+					// User pressed Esc — abort auto-detect.
+					sendToUI(tui.LogMsg{Time: time.Now(), Text: "Auto-detect cancelled"})
+					sendToUI(tui.SignalStateMsg{Device: primary.Selected.VideoDisplay, Probing: false})
+					poller.Resume()
+					startAudioMeter()
+					return
+				}
 
 				// Now scan format codes for the chosen input.
 				result, err = scanner.AutoDetectFormat(detectCtx, ffmpegPath, primary.Selected.VideoDisplay, chosenInput, func(msg tui.AutoDetectProgressMsg) {
@@ -661,6 +673,18 @@ func runTUI(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) error {
 			if saveErr := saveConfig(cfg); saveErr != nil {
 				sendToUI(tui.ErrorBannerMsg{Text: "Auto-detect: failed to save config: " + saveErr.Error()})
 			}
+
+			// Update the live capture mode so recording, preview, and
+			// metering all use the newly-detected input/format.
+			primary.Mode = capture.DecklinkMode{
+				FormatCode: result.FormatCode,
+				VideoInput: result.VideoInput,
+			}
+
+			// Rebuild audioInputArgs with the updated mode.
+			audioMu.Lock()
+			audioInputArgs = primary.Mode.BuildInputArgs(primary.Selected.VideoConfigValue, primary.Selected.AudioConfigValue)
+			audioMu.Unlock()
 
 			sendToUI(tui.AutoDetectCompleteMsg{
 				VideoInput: result.VideoInput,
@@ -1227,10 +1251,10 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 		fmt.Println("Probing video inputs...")
 
 		detectCtx, cancelDetect := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancelDetect()
 		result, detectErr := scanner.AutoDetect(detectCtx, ffmpegPath, primary.Selected.VideoDisplay, func(msg tui.AutoDetectProgressMsg) {
 			fmt.Printf("  %s\n", msg.Detail)
 		})
-		cancelDetect()
 
 		if detectErr != nil {
 			fmt.Printf("Auto-detect failed: %v\n", detectErr)
@@ -1265,6 +1289,10 @@ func runPlaintext(cfg cfgpkg.Config, ffmpegPath string, cmd *cobra.Command) erro
 			devices[0].FormatCode = result.FormatCode
 			cfg.SetDevices(devices, cfg.UsesDevicesArray())
 			primary.Config = devices[0]
+			primary.Mode = capture.DecklinkMode{
+				FormatCode: result.FormatCode,
+				VideoInput: result.VideoInput,
+			}
 			if saveErr := saveConfig(cfg); saveErr != nil {
 				fmt.Printf("Warning: failed to save config: %v\n", saveErr)
 			} else {

@@ -47,7 +47,8 @@ func (o InputChoiceOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 			chosen := o.options[o.selected].value
 			return nil, func() tea.Msg { return InputChosenMsg{VideoInput: chosen} }
 		case "esc":
-			return nil, nil
+			// Send empty string to unblock the auto-detect goroutine.
+			return nil, func() tea.Msg { return InputChosenMsg{VideoInput: ""} }
 		}
 	}
 	return o, nil
