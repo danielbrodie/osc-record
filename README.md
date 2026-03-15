@@ -20,24 +20,43 @@ Built for theatrical environments where recording needs to be hands-free, show-c
 
 ## Install
 
-### macOS (Homebrew)
-
 ```sh
 brew tap danielbrodie/tap
 brew install osc-record
 ```
 
-This installs `osc-record` and a pre-built ffmpeg with DeckLink support. You also need [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers installed for decklink capture.
+This installs `osc-record` and a pre-built ffmpeg with DeckLink support. You also need [Blackmagic Desktop Video](https://www.blackmagicdesign.com/support) drivers (14.3+) installed.
 
-### Manual (all platforms)
+**Upgrade** to the latest version:
+
+```sh
+brew update && brew upgrade osc-record
+```
+
+**Reinstall** if something is broken (stale tap, partial install, wrong ffmpeg):
+
+```sh
+brew reinstall osc-record ffmpeg-decklink
+```
+
+If that doesn't fix it, do a full clean install:
+
+```sh
+brew uninstall osc-record ffmpeg-decklink
+brew untap danielbrodie/tap
+brew tap danielbrodie/tap
+brew install osc-record
+```
+
+<details>
+<summary>Manual install / Windows</summary>
 
 Download the latest binary from [Releases](https://github.com/danielbrodie/osc-record/releases) and put it in your `$PATH`.
 
 You need ffmpeg in your `$PATH` (or set `ffmpeg.path` in config). For Blackmagic devices, ffmpeg must be built with `--enable-decklink`.
 
-### Windows
-
-Download `osc-record_windows_amd64.zip` from [Releases](https://github.com/danielbrodie/osc-record/releases). Requires ffmpeg with DeckLink support and Blackmagic Desktop Video drivers.
+For Windows, download `osc-record_windows_amd64.zip`. Requires Blackmagic Desktop Video drivers.
+</details>
 
 ---
 
@@ -284,31 +303,11 @@ MIT
 
 ### Disguise / d3 OSC
 
-Disguise sends OSC inside **bundle packets** (`#bundle`). osc-record handles bundles correctly as of v1.1.5. If you upgraded from an earlier version and setup/recording never triggered from Disguise, reinstall to get v1.1.5+.
-
-### Reinstall / upgrade
-
-To fully reinstall (e.g. after a version bump):
-
-```sh
-brew uninstall osc-record ffmpeg-decklink
-brew untap danielbrodie/tap
-brew tap danielbrodie/tap
-brew install osc-record
-```
-
-You must uninstall `ffmpeg-decklink` before `untap` — Homebrew refuses to remove a tap with installed formulae.
+Disguise sends OSC inside **bundle packets** (`#bundle`). osc-record handles bundles correctly as of v1.1.5. If setup/recording never triggers from Disguise, upgrade: `brew upgrade osc-record`
 
 ### ffmpeg not found
 
-If you see `Error: ffmpeg not found on PATH`, osc-record looks for both `ffmpeg` and `ffmpeg-decklink` automatically. If neither is found:
-
-```sh
-brew tap danielbrodie/tap
-brew install ffmpeg-decklink
-```
-
-Or point to any existing ffmpeg in your config:
+osc-record looks for both `ffmpeg` and `ffmpeg-decklink` on your PATH. If neither is found, reinstall (see [Install](#install) above) or point to an existing ffmpeg:
 
 ```toml
 [ffmpeg]
