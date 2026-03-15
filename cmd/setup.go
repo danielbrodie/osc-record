@@ -36,7 +36,10 @@ Saves results to the config file. Use this for scripted or headless environments
 		fmt.Print("Send your RECORD cue now (or Enter to keep current)... ")
 		addr, err := listenForOSC(cfg.OSC.Port, 15*time.Second)
 		if err != nil {
-			if cfg.OSC.RecordAddress == "" {
+			if isPortInUse(err) {
+				fmt.Printf("\nError: %s\n", err)
+				return err
+			} else if cfg.OSC.RecordAddress == "" {
 				fmt.Println("\nNo OSC received. Configure manually in config.toml.")
 			} else {
 				fmt.Printf("\nTimeout — keeping %q\n", cfg.OSC.RecordAddress)
@@ -58,7 +61,10 @@ Saves results to the config file. Use this for scripted or headless environments
 		fmt.Print("Send your STOP cue now (or Enter to keep current)... ")
 		addr, err = listenForOSC(cfg.OSC.Port, 15*time.Second)
 		if err != nil {
-			if cfg.OSC.StopAddress == "" {
+			if isPortInUse(err) {
+				fmt.Printf("\nError: %s\n", err)
+				return err
+			} else if cfg.OSC.StopAddress == "" {
 				fmt.Println("\nNo OSC received. Configure manually in config.toml.")
 			} else {
 				fmt.Printf("\nTimeout — keeping %q\n", cfg.OSC.StopAddress)
@@ -104,10 +110,17 @@ Saves results to the config file. Use this for scripted or headless environments
 }
 
 // listenForOSC opens a UDP socket and returns the first OSC address received within timeout.
+func isPortInUse(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "address already in use")
+}
+
 func listenForOSC(port int, timeout time.Duration) (string, error) {
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	conn, err := net.ListenPacket("udp", addr)
 	if err != nil {
+		if isPortInUse(err) {
+			return "", fmt.Errorf("port %d is already in use — stop osc-record run before running setup", port)
+		}
 		return "", err
 	}
 	defer conn.Close()
